@@ -225,3 +225,4 @@ def save_data_online_h5(config,
             track_dataset.resize((new_len, n_bodyparts, 3))
 
             track_dataset[-1:] = points_3d  # shape (1, n_bodyparts, 3)
+            
