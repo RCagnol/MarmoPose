@@ -1,6 +1,7 @@
 import logging
 import time
 import threading
+import shutil
 from collections import defaultdict
 from pathlib import Path
 import queue
@@ -38,21 +39,19 @@ def setup_logging(log_file_path: str = None) -> None:
     logger.addHandler(c_handler)
     logger.addHandler(f_handler)
 
-
 def move_log_file(to_dir: str, from_path: str = None) -> None:
     if from_path is None:
-        from_path = f'{time.strftime("%Y%m%d")}.log'
-    from_path = Path(from_path)
-    
-    to_dir = Path(to_dir) / 'log'
-    if not to_dir.exists():
-        to_dir.mkdir(parents=True, exist_ok=True)
-    to_path = to_dir / f'{time.strftime("%Y%m%d_%H%M%S")}.log'
+        from_path = f"{time.strftime('%Y%m%d')}.log"
 
-    logger.info(f"Log file saved at {to_path}")
+    from_path = Path(from_path)
+    to_dir_path = Path(to_dir) / "log"
+    to_dir_path.mkdir(parents=True, exist_ok=True)
+
+    to_path = to_dir_path / f"{time.strftime('%Y%m%d_%H%M%S')}.log"
+
     logging.shutdown()
 
-    from_path.rename(to_path)
+    shutil.move(str(from_path), str(to_path))
     
 
 def drain_queue(q):
@@ -278,7 +277,7 @@ class MultiVideoCapture:
         for t in self.camera_threads:
             t.start()
 
-    def get_next_frames(self, timeout=1.0):
+    def get_next_frames(self, timeout=5.0):
         frames = []
         for q in self.queues:
             try:

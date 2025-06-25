@@ -55,7 +55,7 @@ pip install -e .
 
 
 ## Usage
-First download the pretrained **models** and **demos** from [Tsinghua Cloud](https://cloud.tsinghua.edu.cn/d/7f190f04b2e541b1a408/), and place them in the same directory as `README.md`. Alternatively, store them in another directory and specify it in the config file. For getting started, please refer to the Jupyter Notebooks in the `examples` directory.
+First download the pretrained **models** and **demos** from [Zenodo](https://doi.org/10.5281/zenodo.15733938), and place them in the same directory as `README.md`. Alternatively, store them in another directory and specify it in the config file. For getting started, please refer to the Jupyter Notebooks in the `examples` directory.
 
 ### Models
 Currently, we provide 6 pretrained models tailored for different scenarios. The training data is **Marmoset3K**, containing 1527 images with one marmoset and 1646 images with two marmosets (where one is dyed blue).
@@ -136,7 +136,7 @@ For scenarios requiring real-time processing, refer to `examples/realtime.py` an
 
 It is essential to first label new data accurately. We recommend using [SLEAP](https://sleap.ai/) for this purpose. Detailed instructions for labeling are provided in `tools/Data Annotation Guide.pdf`.
 
-2D prediction models in MarmoPose are trained with data in [COCO format](https://cocodataset.org/#format-data). After labeling new data with SLEAP, you must convert it to COCO format. Refer to `tools/sleap2coco.py` to for this conversion process.
+2D prediction models in MarmoPose are trained with data in [COCO format](https://cocodataset.org/#format-data). After labeling new data with SLEAP, you must convert it to COCO format. Refer to `tools/sleap2coco.py` for this conversion process.
 
 
 ### Fine-tune detection model
