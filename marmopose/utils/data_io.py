@@ -76,9 +76,10 @@ def load_points_bboxes_2d_h5(file_path: Path) -> np.ndarray:
             bboxes = f[f'{name}_bboxes'][:]
             all_points_with_score_2d.append(points)
             all_bboxes.append(bboxes)
-    
-    all_points_with_score_2d = np.array(all_points_with_score_2d)
-    all_bboxes = np.array(all_bboxes)
+
+    min_length = min(points.shape[1] for points in all_points_with_score_2d) # Ensure all cameras have the same number of frames
+    all_points_with_score_2d = np.array([points[:, :min_length, :, :] for points in all_points_with_score_2d])
+    all_bboxes = np.array([bboxes[:, :min_length, :] for bboxes in all_bboxes])
 
     logger.info(f'Loaded 2D points and bboxes from {file_path} with order: {keys}')
 

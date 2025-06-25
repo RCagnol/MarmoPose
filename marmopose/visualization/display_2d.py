@@ -58,7 +58,7 @@ class Visualizer2D:
         writer = skvideo.io.FFmpegWriter(output_path, inputdict={'-framerate': str(input_stream.average_rate)},
                                          outputdict={'-vcodec': 'libx264', '-pix_fmt': 'yuv420p', '-preset': 'superfast', '-crf': '23'})
 
-        n_frames = input_stream.frames
+        n_frames = points_with_score_2d.shape[1]
         for frame_idx, frame in zip(trange(n_frames, ncols=100, desc=f'2D Visualizing {output_path.stem}', unit='frames'), input_container.decode(video=0)):
             # TODO: Try to add score to the visualization
             points_2d = points_with_score_2d[:, frame_idx, :, :2]  # (n_tracks, n_bodyparts, 2)
