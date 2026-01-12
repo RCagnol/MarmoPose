@@ -17,7 +17,7 @@ animal:
 calibration:
   n_cameras: 4
   board_size: [11, 8]
-  board_square_side_length: 25 # mm
+  board_square_side_length: 20 # mm
   fisheye: false
 
 
@@ -30,8 +30,7 @@ visualization:
     - ['neck', 'spinemid', 'tailbase']
     - ['lefthand', 'leftelbow', 'neck', 'rightelbow', 'righthand']
     - ['leftfoot', 'leftknee', 'tailbase', 'rightknee', 'rightfoot']
-  #room_dimensions: [600, 700, 825, 30]
-  room_dimensions: [700, 600, 825, 30]
+  room_dimensions: [660, 560, 800, 30]
 
 
 threshold:
