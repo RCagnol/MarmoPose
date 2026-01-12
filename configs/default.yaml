@@ -1,5 +1,5 @@
 directory:
-  project: '../demos/pair'
+  project: '../demos/single'
   det_model: '../models/detection_model'
   pose_model: '../models/pose_model'
   dae_model: '../models/dae_model'
@@ -17,7 +17,7 @@ animal:
 calibration:
   n_cameras: 4
   board_size: [11, 8]
-  board_square_side_length: 45 # mm
+  board_square_side_length: 20 # mm
   fisheye: false
 
 
@@ -30,6 +30,7 @@ visualization:
     - ['neck', 'spinemid', 'tailbase']
     - ['lefthand', 'leftelbow', 'neck', 'rightelbow', 'righthand']
     - ['leftfoot', 'leftknee', 'tailbase', 'rightknee', 'rightfoot']
+  room_dimensions: [660, 560, 800, 30]
 
 
 threshold:

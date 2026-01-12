@@ -13,6 +13,9 @@ import seaborn as sns
 import skvideo.io
 import av
 
+import keyboard
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -188,9 +191,10 @@ class LocalVideoThread(BaseVideoThread):
 
 class RTSPVideoThread(BaseVideoThread):
     def __init__(self, path, name, frame_queue, stop_event, barrier,
-                 do_cache=True, output_dir=None, duration=None):
+                 do_cache=True, output_dir=None, duration=None, keypress=None):
         super().__init__(path, name, frame_queue, stop_event, barrier, do_cache, output_dir)
         self.duration = duration
+        self.keypress = keypress
 
     def run(self):
         options = {
@@ -235,6 +239,9 @@ class RTSPVideoThread(BaseVideoThread):
             if self.duration is not None and frame_idx >= int(self.duration * fps):
                 break
 
+            if self.keypress is not None and keyboard.is_pressed(self.keypress):
+                break
+
             pts, timestamp = frame.pts, frame.time
             if frame_idx % int(self.params['fps']*10) == 0:
                 logger.info(f"Stream {self.name}: PTS: {pts}, Time: {timestamp}")
@@ -255,7 +262,7 @@ class RTSPVideoThread(BaseVideoThread):
 
 class MultiVideoCapture:
     def __init__(self, paths, names, do_cache=True, output_dir=None, queue_size=50,
-                 simulate_live=False, start_frame_idx=0, end_frame_idx=None, duration=None):
+                 simulate_live=False, start_frame_idx=0, end_frame_idx=None, duration=None, keypress=None):
         if output_dir is not None:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -267,7 +274,7 @@ class MultiVideoCapture:
         for path, name, q in zip(paths, names, self.queues):
             if str(path).startswith('rtsp://'):
                 thread = RTSPVideoThread(path, name, q, self.stop_event, barrier, 
-                                         do_cache, output_dir, duration)
+                                         do_cache, output_dir, duration, keypress)
             else:
                 thread = LocalVideoThread(path, name, q, self.stop_event, barrier,
                                           do_cache, output_dir, simulate_live, start_frame_idx, end_frame_idx)

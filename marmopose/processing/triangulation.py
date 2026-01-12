@@ -48,7 +48,7 @@ class Reconstructor3D:
         dae = torch.load(dae_checkpoint)
         self.dae_trainer = DaeTrainer(model=dae, bodyparts=self.config.animal['bodyparts'])
 
-    def triangulate(self, all_points_with_score_2d: np.ndarray = None, all_bboxes: np.ndarray = None, reassign_id: bool = False):
+    def triangulate(self, all_points_with_score_2d: np.ndarray = None, all_bboxes: np.ndarray = None, reassign_id: bool = False, file_names: list = None):
         """Triangulate 2D points to 3D coordinates, with optional ID reassignment.
 
         Args:
@@ -57,7 +57,7 @@ class Reconstructor3D:
             reassign_id (bool): Flag to enable ID reassignment.
         """
         if all_points_with_score_2d is None:
-            all_points_with_score_2d, all_bboxes = load_points_bboxes_2d_h5(self.points_2d_path)
+            all_points_with_score_2d, all_bboxes = load_points_bboxes_2d_h5(self.points_2d_path, file_names)
 
         if reassign_id:
             logger.info("ID reassignment enabled")

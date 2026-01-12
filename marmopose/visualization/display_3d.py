@@ -20,7 +20,8 @@ HEIGHT_3D = 1080
 
 
 class Visualizer3D:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, with_gaze = False):
+        self.with_gaze = with_gaze
         self.init_dir(config)
         self.init_visual_cfg(config)
     
@@ -35,13 +36,17 @@ class Visualizer3D:
         skeleton = config.visualization['skeleton']
         self.skeleton_indices = [[bodyparts.index(bp) for bp in line] for line in skeleton]
         self.skeleton_color_list = get_color_list(config.visualization['skeleton_cmap'], number=len(skeleton), cvtInt=False)
+        if self.with_gaze:
+            self.skeleton_indices += [[bodyparts.index('head'),len(bodyparts)]]
+            self.skeleton_color_list += [self.skeleton_color_list[0]]
+        self.room_dimensions = config.visualization['room_dimensions']
 
         # TODO: The order is specified to be consistent with the marmoset dataset
         colors = get_color_list(config.visualization['track_cmap'], cvtInt=False)
         new_order = [1, 0, 4, 3, 2]
         self.track_color_list = [colors[i] if i < len(new_order) else colors[i] for i in new_order] + colors[len(new_order):]
     
-    def generate_video_3d(self, source_3d: str = 'original', start_frame_idx: int = 0, end_frame_idx: int = None, video_type: str = 'composite', fps: int = 25):
+    def generate_video_3d(self, source_3d: str = 'original', start_frame_idx: int = 0, end_frame_idx: int = None, video_type: str = 'composite', fps: int = 25, file_names_2d: list = None):
         assert source_3d in ['original', 'optimized'], f'Invalid data source: {source_3d}'
         assert video_type in ['3d', 'composite'], f'Invalid video type: {video_type}'
 
@@ -54,9 +59,13 @@ class Visualizer3D:
 
         all_points_3d = load_points_3d_h5(self.points_3d_path)
         n_tracks, n_frames, n_bodyparts, _ = all_points_3d.shape
-
-        self.initialize_3d(n_tracks, n_bodyparts)
-
+        self.initialize_3d(n_tracks, n_bodyparts, room_dimensions=self.room_dimensions)
+        # HERE WRITE NEW FUNCTION WHICH SET COORDINATES FOR 2ND POINT OF GAZE VECTOR
+        gaze_vectors = self.generate_gaze_vectors(all_points_3d)
+        norm_gaze_vectors = np.sqrt(np.einsum('ijkl,ijkl -> ijk', gaze_vectors, gaze_vectors))[..., np.newaxis]
+        idx_head = self.config.animal['bodyparts'].index('head')
+        gaze_points = gaze_vectors* 100/norm_gaze_vectors + all_points_3d[:,:,idx_head:idx_head+1,:]
+        all_points_3d = np.concatenate((all_points_3d, gaze_points), axis = 2)
         writer = skvideo.io.FFmpegWriter(self.video_labeled_3d_path, inputdict={'-framerate': str(fps)},
                                         outputdict={'-vcodec': 'libx264', '-pix_fmt': 'yuv420p', '-preset': 'superfast', '-crf': '23'})
 
@@ -64,7 +73,10 @@ class Visualizer3D:
         logger.info(f'Generating {video_type} video from frame {start_frame_idx} to {end_frame_idx}')
 
         if video_type == 'composite':
-            video_paths = sorted([str(p) for p in self.videos_2d_dir.glob("*.mp4")])
+            if file_names_2d is None:
+                video_paths = sorted([str(p) for p in self.videos_2d_dir.glob("*.mp4")])
+            else:
+                video_paths = sorted([self.videos_2d_dir / (file + '.mp4') for file in file_names_2d])
             mvc = MultiVideoCapture(video_paths, video_paths, do_cache=True, simulate_live=False, start_frame_idx=start_frame_idx, end_frame_idx=end_frame_idx)
             mvc.start()
 
@@ -106,6 +118,8 @@ class Visualizer3D:
 
             line_colors.extend([color for _ in range(len(indices)-1)])
 
+         
+
         self.point_clouds, self.line_sets = [], []
         for track_idx in range(n_tracks):
             points = o3d.geometry.PointCloud()
@@ -123,6 +137,8 @@ class Visualizer3D:
             self.vis.add_geometry(lines)
             self.line_sets.append(lines)
 
+
+
         ctr = self.vis.get_view_control()
         ctr.set_lookat([0, 200, 0])
         ctr.set_front([1, 1, 1.1])
@@ -136,7 +152,7 @@ class Visualizer3D:
 
             line_set.points = point_cloud.points
             self.vis.update_geometry(line_set)
-
+    
         self.vis.poll_events()
         self.vis.update_renderer()
 
@@ -279,3 +295,15 @@ class Visualizer3D:
         image.save(output_path, format="png", dpi=(300, 300))
 
         self.vis.destroy_window()
+
+    def generate_gaze_vectors(self, all_points: np.ndarray):
+        point_head = np.nonzero(np.array(self.config.animal["bodyparts"]) == "head")[0]
+        point_leftear = np.nonzero(np.array(self.config.animal["bodyparts"]) == "leftear")[0]
+        point_rightear = np.nonzero(np.array(self.config.animal["bodyparts"]) == "rightear")[0]
+        head_coordinates = all_points[:,:,point_head,:]
+        leftear_coordinates = all_points[:,:,point_leftear,:]
+        rightear_coordinates = all_points[:,:,point_rightear,:]
+        middleear_coordinates = (leftear_coordinates + rightear_coordinates)/2
+        return head_coordinates-middleear_coordinates
+
+    

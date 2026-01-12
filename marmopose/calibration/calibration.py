@@ -72,7 +72,6 @@ class Calibrator:
         Set coordinates for each camera by capturing from video frames.
 
         Args:
-            config: Configuration dictionary containing project settings.
             video_inds: The index of videos for setting coordinates.
             offset: 3D Offset values (x, y, z).
             obj_name: Name of the object for which coordinates are being set.
