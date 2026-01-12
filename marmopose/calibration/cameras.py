@@ -537,15 +537,13 @@ class CameraGroup:
     def calibrate_rows(self, all_rows, board, 
                        init_intrinsics=True, init_extrinsics=True, verbose=True, **kwargs):
         assert len(all_rows) == len(self.cameras), "Number of camera detections does not match number of cameras"
-
         for rows, camera in zip(all_rows, self.cameras):
             size = camera.get_size()
-
             assert size is not None, f"Camera with name {camera.get_name()} has no specified frame size"
 
             if init_intrinsics:
                 objp, imgp = board.get_all_calibration_points(rows)
-                mixed = [(o, i) for (o, i) in zip(objp, imgp) if len(o) >= 7]
+                mixed = [(o, i) for (o, i) in zip(objp, imgp) if len(o) >= 12]
                 objp, imgp = zip(*mixed)
                 matrix = cv2.initCameraMatrix2D(objp, imgp, tuple(size))
 

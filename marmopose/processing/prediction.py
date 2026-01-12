@@ -43,6 +43,8 @@ class Predictor:
 
         self.use_deployed_pose = False
         self.build_pose_model(config.directory['pose_model'])
+
+        self.file_names = []
     
     def init_dir(self, config: Config) -> None:
         """ Initialize directories for storing raw video data and 2D keypoints data based on the provided config. """
@@ -157,10 +159,12 @@ class Predictor:
         """
         if vid_path:
             self.predict_video(vid_path)
+            self.file_names.append(str(vid_path.stem))
         else:
             video_paths = sorted(self.videos_raw_dir.glob(f"*.mp4"))
             for video_path in video_paths:
                 self.predict_video(str(video_path))
+                self.file_names.append(str(video_path.stem))
     
     def predict_video(self, video_path: str) -> None:
         """ 

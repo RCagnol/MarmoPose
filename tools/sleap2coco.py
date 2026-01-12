@@ -4,6 +4,7 @@ import random
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from pathlib import Path
+import sys
 
 import cv2
 import sleap
@@ -260,6 +261,8 @@ class FamilyMarmosetToCoco(SleapToCoco):
     
     def get_area(self, bbox):
         return bbox[2] * bbox[3] / 2.0
+
+
     
 
 def combine_json(json_files, save_path):
@@ -357,12 +360,12 @@ def run_convert_pair():
     train_test_split(json_save_path, test_ratio=0.2, split_seed=42)
 
 
-def run_convert_family():
-    file_name = r'D:\ccq\MarmoPose\data\family.slp'
-    json_save_path = r'D:\ccq\MarmoPose\data\marmoset_family\annotations\all.json'
-    img_save_path = r'D:\ccq\MarmoPose\data\marmoset_family\images'
+def run_convert_family(directory):
+    file_name = directory + '\labelled.slp'
+    json_save_path = directory + r'\annotations\all.json'
+    img_save_path = directory + r'\marmoset_family\images'
 
-    converter = FamilyMarmosetToCoco(file_name, json_save_path, img_save_path, img_prefix='family')
+    converter = FamilyMarmosetToCoco(file_name, json_save_path, img_save_path, img_prefix='single')
     converter.convert()
 
     # Split this json file into train and test set
@@ -389,5 +392,5 @@ if __name__ == '__main__':
         - `generate_categories`: CaCategory name and id of each marmoset
         - `track_name_to_category_id`: Mapping from track name (in SLEAP) to category id
     """
-    run_convert_family()
+    run_convert_family(sys.argv[1])
 

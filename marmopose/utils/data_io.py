@@ -51,7 +51,7 @@ def save_points_bboxes_2d_h5(points: np.ndarray, bboxes: np.ndarray, name: str, 
     logger.info(f'Saving 2D points and bboxes for {name} in {file_path}')
     
 
-def load_points_bboxes_2d_h5(file_path: Path) -> np.ndarray:
+def load_points_bboxes_2d_h5(file_path: Path, file_names: list = None) -> np.ndarray:
     """
     Load 2D points with scores from an HDF5 file.
 
@@ -70,12 +70,13 @@ def load_points_bboxes_2d_h5(file_path: Path) -> np.ndarray:
     all_points_with_score_2d = []
     all_bboxes = []
     with h5py.File(file_path, 'r') as f:
-        keys = sorted(set([k.split('_')[0] for k in f.keys()]))
+        keys = sorted(set(['_'.join(k.split('_')[:-1]) for k in f.keys()]))
         for name in keys:
-            points = f[f'{name}_points'][:]
-            bboxes = f[f'{name}_bboxes'][:]
-            all_points_with_score_2d.append(points)
-            all_bboxes.append(bboxes)
+            if file_names is None or name in file_names:
+                points = f[f'{name}_points'][:]
+                bboxes = f[f'{name}_bboxes'][:]
+                all_points_with_score_2d.append(points)
+                all_bboxes.append(bboxes)
 
     min_length = min(points.shape[1] for points in all_points_with_score_2d) # Ensure all cameras have the same number of frames
     all_points_with_score_2d = np.array([points[:, :min_length, :, :] for points in all_points_with_score_2d])

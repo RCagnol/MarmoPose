@@ -183,7 +183,6 @@ def compute_residuals(points_3d_flat: np.ndarray, *args: Tuple) -> np.ndarray:
     
     n_cams, n_frames, n_joints, _ = points_with_score_2d.shape
     points_3d = points_3d_flat.reshape((n_frames, n_joints, 3))
-
     errors_reproj = reprojection_residual(camera_group, points_3d, points_with_score_2d)
     errors_smooth = smoothness_residual(points_3d, n_deriv_smooth, scale_smooth)
     errors_lengths = bodypart_length_residual(points_3d, bodypart_dist, bodypart_dist_weak, scale_length, scale_length_weak)
