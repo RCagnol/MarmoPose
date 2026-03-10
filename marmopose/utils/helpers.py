@@ -13,9 +13,8 @@ import seaborn as sns
 import skvideo.io
 import av
 
+import os
 import keyboard
-
-
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +194,7 @@ class RTSPVideoThread(BaseVideoThread):
         super().__init__(path, name, frame_queue, stop_event, barrier, do_cache, output_dir)
         self.duration = duration
         self.keypress = keypress
+        self.output_dir = output_dir
 
     def run(self):
         options = {
@@ -232,32 +232,34 @@ class RTSPVideoThread(BaseVideoThread):
         self.barrier.wait()
         logger.info(f"Stream {self.name} start reading at {time.time()}")
 
-        for frame_idx, frame in enumerate(self.container.decode(video=0)):
-            if self.stop_event.is_set():
-                break
-                
-            if self.duration is not None and frame_idx >= int(self.duration * fps):
-                break
+        with open(os.path.join(self.output_dir,self.name +'.txt'),'w') as fp:
+            for frame_idx, frame in enumerate(self.container.decode(video=0)):
+                if self.stop_event.is_set():
+                    break
+                    
+                if self.duration is not None and frame_idx >= int(self.duration * fps):
+                    break
 
-            if self.keypress is not None and keyboard.is_pressed(self.keypress):
-                break
+                if self.keypress is not None and keyboard.is_pressed(self.keypress):
+                    break
 
-            pts, timestamp = frame.pts, frame.time
-            if frame_idx % int(self.params['fps']*10) == 0:
-                logger.info(f"Stream {self.name}: PTS: {pts}, Time: {timestamp}")
+                pts, timestamp = frame.pts, frame.time
+                if frame_idx % int(self.params['fps']*10) == 0:
+                    logger.info(f"Stream {self.name}: Frame: {frame_idx} PTS: {pts}, Time: {timestamp}")
 
-            if self.do_cache:
-                self.frame_queue.put(frame.to_ndarray(format='bgr24'))
+                if self.do_cache:
+                    self.frame_queue.put(frame.to_ndarray(format='bgr24'))
 
+                if self.output_path is not None:
+                    fp.write(f'{frame_idx} {pts} {timestamp}\n')
+                    self.writer.writeFrame(frame.to_ndarray(format='rgb24'))
+
+            self.container.close()
             if self.output_path is not None:
-                self.writer.writeFrame(frame.to_ndarray(format='rgb24'))
-
-        self.container.close()
-        if self.output_path is not None:
-            self.writer.close()
-            logger.info(f"{self.path} saved at {self.output_path}")
-        
-        logger.debug(f"{self.path} Released!")
+                self.writer.close()
+                logger.info(f"{self.path} saved at {self.output_path}")
+            
+            logger.debug(f"{self.path} Released!")
 
 
 class MultiVideoCapture:

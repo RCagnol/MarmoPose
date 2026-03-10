@@ -5,9 +5,10 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from pathlib import Path
 import sys
+import os
 
 import cv2
-import sleap
+import sleap_io as sleap
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -71,6 +72,7 @@ class SleapToCoco(ABC):
         return images, annotations
     
     def save_frame(self, video_path, frame_index, save_path, crop_coords=None):
+        print(video_path, frame_index, save_path)
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
 
         cap = cv2.VideoCapture(video_path)
@@ -92,9 +94,9 @@ class SleapToCoco(ABC):
     def generate_annotation(self, instance):
         kpt_list = []
         num_keypoints = 0
-        for pt in instance.points:
-            if pt.visible:
-                kpt_list.extend([pt.x, pt.y, 2])
+        for pt in instance.points[[0,1,2,3,9,10,5,6,4,13,11,12,7,8,14,15]]:
+            if pt['visible']:
+                kpt_list.extend([pt['xy'][0], pt['xy'][1], 2])
                 num_keypoints += 1
             else:
                 kpt_list.extend([0, 0, 0])
@@ -121,17 +123,17 @@ class SleapToCoco(ABC):
     def get_bbox(self, instance, mode='xywh'):
         assert mode in ['xywh', 'xyxy'], 'mode should be xywh or xyxy'
 
-        x = min([pt.x for pt in instance.points])
-        y = min([pt.y for pt in instance.points])
+        x = min([pt['xy'][0] for pt in instance.points])
+        y = min([pt['xy'][1] for pt in instance.points])
 
         if mode == 'xywh':
-            width = max([pt.x for pt in instance.points]) - x
-            height = max([pt.y for pt in instance.points]) - y
+            width = max([pt['xy'][0] for pt in instance.points]) - x
+            height = max([pt['xy'][1] for pt in instance.points]) - y
 
             return [x, y, width, height]
         elif mode == 'xyxy':
-            x_max = max([pt.x for pt in instance.points])
-            y_max = max([pt.y for pt in instance.points])
+            x_max = max([pt['xy'][0] for pt in instance.points])
+            y_max = max([pt['xy'][1] for pt in instance.points])
 
             return [x, y, x_max, y_max]
     
@@ -316,6 +318,9 @@ def train_test_split(json_file, test_ratio=0.2, split_seed=42):
             test_annotations.append(ann)
         else:
             train_annotations.append(ann)
+    
+    train_images = train_images[:int(sys.argv[3])]
+    train_annotations = train_annotations[:int(sys.argv[3])]
 
     train_file_name = json_file.replace('all.json', 'train.json')
     test_file_name = json_file.replace('all.json', 'test.json')
@@ -361,15 +366,15 @@ def run_convert_pair():
 
 
 def run_convert_family(directory):
-    file_name = directory + '\labelled.slp'
-    json_save_path = directory + r'\annotations\all.json'
-    img_save_path = directory + r'\marmoset_family\images'
+    file_name = os.path.join(directory,'labelled.slp')
+    json_save_path = os.path.join(directory,'marmoset_family','annotations','all.json')
+    img_save_path = os.path.join(directory,'marmoset_family','images')
 
     converter = FamilyMarmosetToCoco(file_name, json_save_path, img_save_path, img_prefix='single')
     converter.convert()
 
     # Split this json file into train and test set
-    train_test_split(json_save_path, test_ratio=0.2, split_seed=42)
+    train_test_split(json_save_path, test_ratio=float(sys.argv[2]), split_seed=42)
 
 
 if __name__ == '__main__':
