@@ -27,7 +27,7 @@ model = dict(
         act_cfg=dict(type='SiLU', inplace=True)),
     bbox_head=dict(
         type='RTMDetSepBNHead',
-        num_classes=4,
+        num_classes=1,
         in_channels=256,
         stacked_convs=2,
         feat_channels=256,
@@ -61,7 +61,7 @@ model = dict(
 
 
 dataset_type = 'CocoDataset'
-data_root = 'data/marmoset_family/'
+data_root = '../Sleap/TrainingData/marmoset_family/'
 backend_args = None
 
 train_pipeline = [
@@ -143,7 +143,7 @@ val_dataloader = dict(
         metainfo=dict(classes=('white_head_marmoset', 'blue_head_marmoset', 'green_head_marmoset', 'red_head_marmoset', )),
         ann_file='annotations/test.json',
         data_prefix=dict(img='images/'),
-        test_mode=True,
+        test_mode=False,
         pipeline=test_pipeline
     ))
 

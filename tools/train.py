@@ -17,6 +17,7 @@ class MarmosetDataset(BaseCocoStyleDataset):
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a pose model')
     parser.add_argument('config', help='train config file path')
+    parser.add_argument('--list', help='if running several training jobs')
     parser.add_argument('--data-dir', help='the dir storing training data')
     parser.add_argument('--work-dir', help='the dir to save logs and models')
     parser.add_argument(
@@ -147,23 +148,42 @@ def merge_args(cfg, args):
 
 def main():
     args = parse_args()
-
     # load config
     cfg = Config.fromfile(args.config)
+    work_dir_prefix = args.work_dir
 
-    # merge CLI arguments to config
-    cfg = merge_args(cfg, args)
+    if args.list:
+        for n in [55,105,155,181]:
+            args.work_dir = work_dir_prefix + f'_{n}'
+            cfg.data_root = f'../Sleap/TrainingData_{n}/marmoset_family/'
+            cfg.test_dataloader.dataset.data_root = f'../Sleap/TrainingData_{n}/marmoset_family/'
+            cfg.train_dataloader.dataset.data_root = f'../Sleap/TrainingData_{n}/marmoset_family/'
+            cfg.val_dataloader.dataset.data_root = f'../Sleap/TrainingData_{n}/marmoset_family/'
+            # merge CLI arguments to config
+            cfg = merge_args(cfg, args)
+            # set preprocess configs to model
+            if 'preprocess_cfg' in cfg:
+                cfg.model.setdefault('data_preprocessor',
+                                    cfg.get('preprocess_cfg', {}))
 
-    # set preprocess configs to model
-    if 'preprocess_cfg' in cfg:
-        cfg.model.setdefault('data_preprocessor',
-                             cfg.get('preprocess_cfg', {}))
+            # build the runner from config
+            runner = Runner.from_cfg(cfg)
 
-    # build the runner from config
-    runner = Runner.from_cfg(cfg)
+            # start training
+            runner.train()
+    else:
+            # merge CLI arguments to config
+            cfg = merge_args(cfg, args)
+            # set preprocess configs to model
+            if 'preprocess_cfg' in cfg:
+                cfg.model.setdefault('data_preprocessor',
+                                    cfg.get('preprocess_cfg', {}))
 
-    # start training
-    runner.train()
+            # build the runner from config
+            runner = Runner.from_cfg(cfg)
+
+            # start training
+            runner.train()
 
 
 if __name__ == '__main__':

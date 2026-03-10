@@ -57,7 +57,7 @@ model = dict(
 
 
 dataset_type = 'MarmosetDataset'
-data_root = 'data/marmoset/'
+data_root = '../Sleap/TrainingData/marmoset_family/'
 data_mode = 'topdown'
 
 backend_args = dict(backend='local')

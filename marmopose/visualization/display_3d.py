@@ -61,11 +61,12 @@ class Visualizer3D:
         n_tracks, n_frames, n_bodyparts, _ = all_points_3d.shape
         self.initialize_3d(n_tracks, n_bodyparts, room_dimensions=self.room_dimensions)
         # HERE WRITE NEW FUNCTION WHICH SET COORDINATES FOR 2ND POINT OF GAZE VECTOR
-        gaze_vectors = self.generate_gaze_vectors(all_points_3d)
-        norm_gaze_vectors = np.sqrt(np.einsum('ijkl,ijkl -> ijk', gaze_vectors, gaze_vectors))[..., np.newaxis]
-        idx_head = self.config.animal['bodyparts'].index('head')
-        gaze_points = gaze_vectors* 100/norm_gaze_vectors + all_points_3d[:,:,idx_head:idx_head+1,:]
-        all_points_3d = np.concatenate((all_points_3d, gaze_points), axis = 2)
+        if self.with_gaze:
+            gaze_vectors = self.generate_gaze_vectors(all_points_3d)
+            norm_gaze_vectors = np.sqrt(np.einsum('ijkl,ijkl -> ijk', gaze_vectors, gaze_vectors))[..., np.newaxis]
+            idx_head = self.config.animal['bodyparts'].index('head')
+            gaze_points = gaze_vectors* 100/norm_gaze_vectors + all_points_3d[:,:,idx_head:idx_head+1,:]
+            all_points_3d = np.concatenate((all_points_3d, gaze_points), axis = 2)
         writer = skvideo.io.FFmpegWriter(self.video_labeled_3d_path, inputdict={'-framerate': str(fps)},
                                         outputdict={'-vcodec': 'libx264', '-pix_fmt': 'yuv420p', '-preset': 'superfast', '-crf': '23'})
 
