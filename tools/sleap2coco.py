@@ -9,6 +9,8 @@ import os
 
 import cv2
 import sleap_io as sleap
+from sleap_io.io.utils import read_hdf5_dataset
+from sleap_io.io.slp import read_videos
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -21,6 +23,8 @@ class SleapToCoco(ABC):
 
     def __init__(self, file_name, json_save_path, img_save_path, img_prefix=None):
         self.labels = sleap.load_file(file_name)
+        self.suggestions = read_hdf5_dataset(file_name, "suggestions_json")
+        self.videos = read_videos(file_name, open_backend=True)
 
         Path(json_save_path).parent.mkdir(parents=True, exist_ok=True)
         self.json_save_path = json_save_path
@@ -46,11 +50,28 @@ class SleapToCoco(ABC):
     def generate_instances(self):
         images = []
         annotations = []
+        seen_frames = {}
+        
+        annotations_dict = {}
+        
         for lf in self.labels:
             video_path = lf.video.filename
             frame_idx = lf.frame_idx
             
-            # Save image and add image info
+            if video_path in seen_frames.keys():
+                if frame_idx in seen_frames[video_path].keys():
+                    raise KeyError("Frame {frame_idx} already seen in labels for video {video_path}")
+                seen_frames[video_path][frame_idx] = lf
+            else:
+                seen_frames[video_path] = {frame_idx: lf}
+
+            
+        for s in self.suggestions:
+            decoded_s = json.loads(s.decode('utf-8'))
+
+            video_path = self.videos[int(decoded_s['video'])].filename
+            frame_idx = decoded_s['frame_idx']
+
             img_name = f'{self.img_prefix}_{self.type_count:04}.jpg'
             height, width = self.save_frame(video_path, frame_idx, f'{self.img_save_path}/{img_name}')
             images.append({
@@ -59,14 +80,18 @@ class SleapToCoco(ABC):
                 'height': height,
                 'width': width
             })
-
-            # Save annotations
-            for instance in lf.instances:
-                annotations.append(self.generate_annotation(instance))
-
+            
+            if video_path in seen_frames.keys():
+                if frame_idx in seen_frames[video_path].keys():
+                    annotations += [self.generate_annotation(instance) for instance in seen_frames[video_path][frame_idx].instances]
+                else:
+                    annotations.append(self.generate_empty_annotation())      
+            else:
+                annotations.append(self.generate_empty_annotation())
+            
             SleapToCoco.image_id += 1
             SleapToCoco.type_count += 1
-        
+                    
         logger.info(f'{SleapToCoco.image_id} images | {SleapToCoco.annotation_id} annotations | {SleapToCoco.type_count} counts')
         
         return images, annotations
@@ -94,7 +119,7 @@ class SleapToCoco(ABC):
     def generate_annotation(self, instance):
         kpt_list = []
         num_keypoints = 0
-        for pt in instance.points[[0,1,2,3,9,10,5,6,4,13,11,12,7,8,14,15]]:
+        for pt in instance.points[[0,1,2,3,5,4,6,7,8,9,10,11,13,12,14,15]]:
             if pt['visible']:
                 kpt_list.extend([pt['xy'][0], pt['xy'][1], 2])
                 num_keypoints += 1
@@ -115,6 +140,16 @@ class SleapToCoco(ABC):
             'bbox': bbox,
             'area': area,
             'iscrowd': 0
+        }
+        SleapToCoco.annotation_id += 1
+
+        return annotation
+
+    def generate_empty_annotation(self):
+
+        annotation = {
+            'image_id': self.image_id,
+            'id': self.annotation_id
         }
         SleapToCoco.annotation_id += 1
 
@@ -274,8 +309,10 @@ def combine_json(json_files, save_path):
             if i == 0:
                 combined_data = data
             else:
-                combined_data['images'].extend(data['images'])
-                combined_data['annotations'].extend(data['annotations'])
+                if 'images' in data.keys():
+                    combined_data['images'].extend(data['images'])
+                if 'annotations' in data.keys():
+                    combined_data['annotations'].extend(data['annotations'])
     
     with open(save_path, 'w') as f:
         json.dump(combined_data, f, indent=4)
@@ -319,8 +356,8 @@ def train_test_split(json_file, test_ratio=0.2, split_seed=42):
         else:
             train_annotations.append(ann)
     
-    train_images = train_images[:int(sys.argv[3])]
-    train_annotations = train_annotations[:int(sys.argv[3])]
+    #train_images = train_images[:int(sys.argv[3])]
+    #train_annotations = train_annotations[:int(sys.argv[3])]
 
     train_file_name = json_file.replace('all.json', 'train.json')
     test_file_name = json_file.replace('all.json', 'test.json')
@@ -364,15 +401,69 @@ def run_convert_pair():
     # Split this json file into train and test set
     train_test_split(json_save_path, test_ratio=0.2, split_seed=42)
 
+def create_non_labelled_json(non_labelled_directory, nonlabelled_save_path, labelled_path, img_prefix, img_save_dir):    
 
-def run_convert_family(directory):
+    with open(labelled_path, 'r') as f:
+        data = json.load(f)
+
+    
+    images = []
+    annotations = []
+    image_id = data['images'][-1]['id'] + 1
+    annotation_id = data['annotations'][-1]['id'] + 1
+    
+    for image_path in os.listdir(non_labelled_directory):
+        if not image_path[-4:] == '.jpg':
+            continue
+    
+        image = cv2.imread(os.path.join(non_labelled_directory,image_path))
+        img_name = f'{img_prefix}_{image_id}.jpg'
+        height, width = list(image.shape[:2])
+        images.append({
+            'id': image_id,
+            'file_name': img_name,
+            'height': height,
+            'width': width
+        })
+        img_save_path = os.path.join(img_save_dir,img_name)
+        cv2.imwrite(img_save_path, image, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
+        logger.info(f'{image_path} saved to {img_save_path}')
+
+        annotations.append({
+            'image_id': image_id,
+            'id': annotation_id,
+        })
+        
+        image_id += 1
+        annotation_id += 1
+        
+    nonlabelled_data = {
+        'categories': data['categories'],
+        'info': data['info'],
+        'images': images,
+    }
+
+    with open(nonlabelled_save_path, 'w') as f:
+        json.dump(nonlabelled_data, f)
+
+
+def run_convert_family(directory, img_prefix):
     file_name = os.path.join(directory,'labelled.slp')
+    non_labelled_directory = os.path.join(directory,'EmptyFrames')
+    non_labelled_directory_exist = os.path.isdir(os.path.join(directory,'EmptyFrames'))
     json_save_path = os.path.join(directory,'marmoset_family','annotations','all.json')
-    img_save_path = os.path.join(directory,'marmoset_family','images')
+    json_nonlabelled_save_path = os.path.join(directory,'marmoset_family','annotations','nonlabelled.json')
+    json_labelled_save_path = os.path.join(directory,'marmoset_family','annotations','labelled.json')
+    img_save_dir = os.path.join(directory,'marmoset_family','images')
 
-    converter = FamilyMarmosetToCoco(file_name, json_save_path, img_save_path, img_prefix='single')
-    converter.convert()
-
+    if non_labelled_directory_exist:
+        converter = FamilyMarmosetToCoco(file_name, json_labelled_save_path, img_save_dir, img_prefix=img_prefix)
+        converter.convert()
+        create_non_labelled_json(non_labelled_directory, json_nonlabelled_save_path, json_labelled_save_path, img_prefix, img_save_dir)
+        combine_json((json_labelled_save_path, json_nonlabelled_save_path), json_save_path)
+    else:
+        converter = FamilyMarmosetToCoco(file_name, json_save_path, img_save_dir, img_prefix=img_prefix)
+        converter.convert()
     # Split this json file into train and test set
     train_test_split(json_save_path, test_ratio=float(sys.argv[2]), split_seed=42)
 
@@ -397,5 +488,5 @@ if __name__ == '__main__':
         - `generate_categories`: CaCategory name and id of each marmoset
         - `track_name_to_category_id`: Mapping from track name (in SLEAP) to category id
     """
-    run_convert_family(sys.argv[1])
+    run_convert_family(sys.argv[1], img_prefix = 'single')
 
