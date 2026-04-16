@@ -8,7 +8,7 @@ from collections import defaultdict
 import cv2
 import numpy as np
 from tqdm import trange
-
+from func_timeout import func_timeout, FunctionTimedOut
 
 def merge_rows(all_rows, cam_names=None):
     """Takes a list of rows returned from detect_images or detect_videos.
@@ -282,9 +282,7 @@ class CalibrationObject(ABC):
                 break
             if framenum % skip != 0 and go <= 0:
                 continue
-
             corners, ids = self.detect_image(frame)
-
             if corners is not None and len(corners) > 0:
                 if prefix is None:
                     key = framenum
@@ -406,7 +404,11 @@ class Checkerboard(CalibrationObject):
             gray = image
 
         size = self.get_size()
-        pattern_was_found, corners = cv2.findChessboardCorners(gray, size, self.DETECT_PARAMS)
+        try:
+            pattern_was_found, corners = func_timeout(10,cv2.findChessboardCorners, args=(gray, size, self.DETECT_PARAMS))
+
+        except FunctionTimedOut:
+            pattern_was_found, corners = False, None
 
         if corners is not None:
 

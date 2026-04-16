@@ -2,6 +2,7 @@
 # (BSD 2-Clause License, Copyright (c) 2019-2023, Lili Karashchuk)
 # The code has been modified to suit local requirements
 
+import logging
 import json
 import queue
 from collections import Counter, defaultdict
@@ -18,6 +19,9 @@ from scipy.sparse import dok_matrix
 
 from marmopose.calibration.boards import extract_points, extract_rtvecs, merge_rows
 from marmopose.utils.helpers import get_video_params
+
+logger = logging.getLogger(__name__)
+
 
 
 def get_extrinsic_matrix(rvec: np.ndarray, tvec: np.ndarray) -> np.ndarray:
@@ -546,7 +550,8 @@ class CameraGroup:
                 mixed = [(o, i) for (o, i) in zip(objp, imgp) if len(o) >= 12]
                 objp, imgp = zip(*mixed)
                 matrix = cv2.initCameraMatrix2D(objp, imgp, tuple(size))
-
+                logger.info(f'Intrinsic parameters found: {matrix}')
+                matrix = np.array([[1120,0,959.5],[0,1120,539.5],[0,0,1]])
                 camera.set_camera_matrix(matrix)
 
         for i, (row, cam) in enumerate(zip(all_rows, self.cameras)):
