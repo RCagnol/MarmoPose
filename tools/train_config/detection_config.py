@@ -61,7 +61,7 @@ model = dict(
 
 
 dataset_type = 'CocoDataset'
-data_root = '../Sleap/TrainingData/marmoset_family/'
+data_root = '../Sleap/TrainingDataHomeMoreEmptyFrames/marmoset_family/'
 backend_args = None
 
 train_pipeline = [
@@ -143,7 +143,7 @@ val_dataloader = dict(
         metainfo=dict(classes=('white_head_marmoset', 'blue_head_marmoset', 'green_head_marmoset', 'red_head_marmoset', )),
         ann_file='annotations/test.json',
         data_prefix=dict(img='images/'),
-        test_mode=False,
+        test_mode=True,
         pipeline=test_pipeline
     ))
 
@@ -159,7 +159,7 @@ val_evaluator = dict(
 test_evaluator = val_evaluator
 
 
-max_epochs = 300
+max_epochs = 500
 stage2_num_epochs = 50
 base_lr = 0.004
 interval = 10
