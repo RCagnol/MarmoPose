@@ -18,7 +18,8 @@ dependencies = [
   "av",
   "open3d",
   "keyboard",
-  "pyserial"
+  "pyserial",
+  "opencv-python"
 ]
 
 [tool.setuptools]
