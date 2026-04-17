@@ -16,7 +16,9 @@ dependencies = [
   "seaborn",
   "scikit-video",
   "av",
-  "open3d"
+  "open3d",
+  "keyboard",
+  "pyserial"
 ]
 
 [tool.setuptools]
