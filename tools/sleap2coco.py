@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 import sys
 import os
-
+import argparse
 import cv2
 import sleap_io as sleap
 from sleap_io.io.utils import read_hdf5_dataset
@@ -15,6 +15,16 @@ from sleap_io.io.slp import read_videos
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Parse command line arguments
+parser = argparse.ArgumentParser(description="Example utility")
+parser.add_argument("input", help="input file")
+parser.add_argument("split_ratio", help="test split ratio")
+parser.add_argument('--test', action='store_true')
+parser.add_argument('--no-test', dest='test', action='store_false')
+parser.set_defaults(feature=False)
+args = parser.parse_args()
+
+test_dataset = args.test
 
 class SleapToCoco(ABC):
     image_id = 1
@@ -84,9 +94,9 @@ class SleapToCoco(ABC):
             if video_path in seen_frames.keys():
                 if frame_idx in seen_frames[video_path].keys():
                     annotations += [self.generate_annotation(instance) for instance in seen_frames[video_path][frame_idx].instances]
-                else:
+                elif test_dataset:
                     annotations.append(self.generate_empty_annotation())      
-            else:
+            elif test_dataset:
                 annotations.append(self.generate_empty_annotation())
             
             SleapToCoco.image_id += 1
@@ -450,7 +460,7 @@ def create_non_labelled_json(non_labelled_directory, nonlabelled_save_path, labe
 def run_convert_family(directory, img_prefix):
     file_name = os.path.join(directory,'labelled.slp')
     non_labelled_directory = os.path.join(directory,'EmptyFrames')
-    non_labelled_directory_exist = os.path.isdir(os.path.join(directory,'EmptyFrames'))
+    non_labelled_directory_exist = os.path.isdir(non_labelled_directory)
     json_save_path = os.path.join(directory,'marmoset_family','annotations','all.json')
     json_nonlabelled_save_path = os.path.join(directory,'marmoset_family','annotations','nonlabelled.json')
     json_labelled_save_path = os.path.join(directory,'marmoset_family','annotations','labelled.json')
@@ -465,7 +475,7 @@ def run_convert_family(directory, img_prefix):
         converter = FamilyMarmosetToCoco(file_name, json_save_path, img_save_dir, img_prefix=img_prefix)
         converter.convert()
     # Split this json file into train and test set
-    train_test_split(json_save_path, test_ratio=float(sys.argv[2]), split_seed=42)
+    train_test_split(json_save_path, test_ratio=float(args.split_ratio), split_seed=42)
 
 
 if __name__ == '__main__':
@@ -488,5 +498,5 @@ if __name__ == '__main__':
         - `generate_categories`: CaCategory name and id of each marmoset
         - `track_name_to_category_id`: Mapping from track name (in SLEAP) to category id
     """
-    run_convert_family(sys.argv[1], img_prefix = 'single')
+    run_convert_family(args.input, img_prefix = 'single')
 
