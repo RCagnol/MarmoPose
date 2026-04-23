@@ -264,14 +264,13 @@ class Visualizer3D:
         height_2d, width_2d, _ = images_2d[0].shape
         new_height_2d = height_3d // n_per_column
         new_width_2d = int(new_height_2d * width_2d / height_2d)
-
         images_2d = [cv2.resize(image, (new_width_2d, new_height_2d)) for image in images_2d]
 
         image_combined = np.full((height_3d, width_3d+2*new_width_2d, 3), 255, dtype=np.uint8)
 
         image_combined[:, new_width_2d:new_width_2d+width_3d] = image_3d
         for i in range(len(images_2d)):
-            r, c = (i+1) % 2, i // 2
+            c, r = i % 2, i // 2
             image_combined[r*new_height_2d:(r+1)*new_height_2d, c*(new_width_2d+width_3d):new_width_2d+c*(new_width_2d+width_3d)] = images_2d[i]
 
         return image_combined
