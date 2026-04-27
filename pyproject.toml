@@ -19,7 +19,9 @@ dependencies = [
   "open3d",
   "keyboard",
   "pyserial",
-  "opencv-python"
+  "opencv-python",
+  "tqdm",
+  "func_timeout"
 ]
 
 [tool.setuptools]
