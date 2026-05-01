@@ -1,8 +1,10 @@
-import sys
 import os
 import shutil
-sys.path.append('../')
+# sys.path.append('../')
 import logging
+import argparse
+from pathlib import Path
+
 from marmopose.version import __version__ as marmopose_version
 from marmopose.config import Config
 from marmopose.calibration.calibration import Calibrator
@@ -10,15 +12,29 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 logger.info(f'MarmoPose version: {marmopose_version}')
 
-VIDEO_DIR = sys.argv[1]
-INPUT_DIR = os.path.join(VIDEO_DIR,'Input')
-CALIB_DIR = os.path.join(VIDEO_DIR,'Calib')
+parser = argparse.ArgumentParser()
+parser.add_argument("input", help="Video directory")
+parser.add_argument("-a", "--axes-order", choices=['0','1','2'],default = '0', help="Order for axes (0: (x,y,z), 1: (y,z,x), 2: (z,x,y) Default: 0)")
+parser.add_argument("-o", "--offset", nargs=3, default = ('0', '0', '0'), metavar = ('offset 1st axis','offset 2nd axis','offset 3rd axis'), help="Defines the offset, needs 3 values")
+parser.add_argument("-O", "--with-offset-point", action='store_true', help="Whether to add a 4th point defining the offset point (which is combined with the offset defined in the offset argument)")
+args = parser.parse_args()
+VIDEO_DIR = Path(args.input)
+if args.axes_order == '0':
+    order = (0, 1, 2)
+elif args.axes_order == '1':
+    order = (1, 2, 0)
+else:
+    order = (2, 0, 1)
+
+offset = tuple([float(o) for o in args.offset])
+
+INPUT_DIR = VIDEO_DIR / 'Input'
+CALIB_DIR = VIDEO_DIR / 'Calib'
+os.makedirs(CALIB_DIR, exist_ok = True)
 for file in os.listdir(INPUT_DIR):
-    file_path = os.path.join(INPUT_DIR,file)
+    file_path = INPUT_DIR / file
     if os.path.isfile(file_path) and file[-4:] == '.mp4':
         shutil.copy(file_path, '../demos/single/videos_raw')
-
-VIDEO_DIR
         
 config_path = '../configs/default.yaml'
 config = Config(
@@ -29,7 +45,7 @@ config = Config(
     project='../demos/single'
 )
 calibrator = Calibrator(config)
-calibrator.set_coordinates(video_inds=[1,2,3, 4], obj_name='axes', offset=(0,0, 0),frame_idx=200)
+calibrator.set_coordinates(video_inds=[2,3], obj_name='axes', offset=offset, frame_idx=200, order=order, with_offset_point = args.with_offset_point)
 shutil.copy('../demos/single/calibration/axes.json', CALIB_DIR)
 
 

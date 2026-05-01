@@ -67,7 +67,7 @@ class Calibrator:
         cgroup.save_to_json(self.output_path)
         logger.info(f'Calibration done! Result stored in: {self.output_path}')
     
-    def set_coordinates(self, video_inds: List, offset: Tuple[float, float, float], obj_name: str = 'axes', frame_idx: int = 0) -> None:
+    def set_coordinates(self, video_inds: List, offset: Tuple[float, float, float], obj_name: str = 'axes', frame_idx: int = 0, order: Tuple[int, int, int] = (0, 1, 2), with_offset_point: bool = False) -> None:
         """
         Set coordinates for each camera by capturing from video frames.
 
@@ -79,14 +79,14 @@ class Calibrator:
         """
         video_paths = sorted(Path(self.config.sub_directory['videos_raw']).glob(f"*.mp4"))
 
-        coordinates_dict = {'offset': offset}
+        coordinates_dict = {'offset': offset, 'order': order}
         for i, video_path in enumerate(video_paths):
             if i+1 not in video_inds:
                 continue
             cam_name = video_path.stem
             cap = cv2.VideoCapture(str(video_path))
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            coordinates_dict[cam_name] = capture_coordinates(cap, cam_name)
+            coordinates_dict[cam_name] = capture_coordinates(cap, cam_name, with_offset_point)
             cap.release()
 
         output_path = self.calibration_path / f'{obj_name}.json'
@@ -161,7 +161,7 @@ def update_camera_parameters(camera, T):
 
 def construct_transformation_matrix(camera_group, axes):
     offset = np.array(axes['offset'])
-    cam_names = [key for key in axes.keys() if key != 'offset']
+    cam_names = [key for key in axes.keys() if key != []'offset','order']]
     axes_2d = np.array([axes[cam_name] for cam_name in cam_names], dtype=np.float32)
     
     sub_camera_group = camera_group.subset_cameras_names(cam_names)
@@ -171,7 +171,11 @@ def construct_transformation_matrix(camera_group, axes):
     new_y_axis = orthogonalize_vector(axes_3d[2] - axes_3d[0], new_x_axis)
     new_z_axis = np.cross(new_x_axis, new_y_axis)
     
-    R = np.vstack([new_x_axis, new_y_axis, new_z_axis])
+    if 'order' in axes.keys():
+        print('ORDER WORKED')
+        R = np.vstack([new_x_axis, new_y_axis, new_z_axis])[axes['order'],:]
+    else:
+        R = np.vstack([new_x_axis, new_y_axis, new_z_axis])
     R /= np.linalg.norm(R, axis=1)[:, None]
     
     # Construct transformation matrix
@@ -195,13 +199,13 @@ def capture_event(event: int, x: int, y: int, flags: int, params: Tuple[List[Tup
     """
     cam_coordinates, current_point_idx = params
     if event == cv2.EVENT_LBUTTONDOWN:
-        point_types = ['original point', 'x-axis point', 'y-axis point']
+        point_types = ['original point', 'x-axis point', 'y-axis point','offset point']
         print(f'{point_types[current_point_idx[0]]}: ({x}, {y})')
         cam_coordinates.append((x, y))
         current_point_idx[0] += 1
 
 
-def capture_coordinates(cap: cv2.VideoCapture, cam_name: str) -> List[Tuple[int, int]]:
+def capture_coordinates(cap: cv2.VideoCapture, cam_name: str, with_offset_point: bool = False) -> List[Tuple[int, int]]:
     """
     Display video frame and capture coordinates of mouse clicks on it.
 
@@ -212,6 +216,7 @@ def capture_coordinates(cap: cv2.VideoCapture, cam_name: str) -> List[Tuple[int,
     Returns:
         List of coordinates captured from the video frame.
     """
+    n_points = 4 if with_offset_point else 3
     print(f'\nSetting axes for {cam_name}...')
     ret, img = cap.read()
     if not ret:
@@ -222,7 +227,7 @@ def capture_coordinates(cap: cv2.VideoCapture, cam_name: str) -> List[Tuple[int,
     current_point_idx = [0]
     cv2.setMouseCallback(cam_name, capture_event, (cam_coords, current_point_idx))
 
-    while len(cam_coords) < 3:
+    while len(cam_coords) < n_points:
         cv2.waitKey(1)
 
     cv2.destroyAllWindows()
