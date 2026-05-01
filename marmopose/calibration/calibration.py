@@ -161,7 +161,7 @@ def update_camera_parameters(camera, T):
 
 def construct_transformation_matrix(camera_group, axes):
     offset = np.array(axes['offset'])
-    cam_names = [key for key in axes.keys() if key != []'offset','order']]
+    cam_names = [key for key in axes.keys() if key != ['offset','order']]
     axes_2d = np.array([axes[cam_name] for cam_name in cam_names], dtype=np.float32)
     
     sub_camera_group = camera_group.subset_cameras_names(cam_names)
