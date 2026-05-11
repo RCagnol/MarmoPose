@@ -237,7 +237,6 @@ class RTSPVideoThread(BaseVideoThread):
         with open(os.path.join(self.output_dir,self.name +'.txt'),'w') as fp:
             fp.write(f'Open 0 {stream_open}\n')
             fp.write(f'Start 0 {stream_start}\n')
-            logger.info(f"Stream {self.name}: Frame: {frame_idx} PTS: {pts}, Time: {timestamp}")
             for frame_idx, frame in enumerate(self.container.decode(video=0)):
                 if self.stop_event.is_set():
                     break
