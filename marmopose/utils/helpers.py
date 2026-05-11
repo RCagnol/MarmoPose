@@ -208,7 +208,8 @@ class RTSPVideoThread(BaseVideoThread):
         stream = self.container.streams.video[0]
         stream.thread_type = 'AUTO'
 
-        logger.info(f'Stream {self.name} open at {time.time()}')
+        stream_open = time.time()
+        logger.info(f'Stream {self.name} open at {stream_open}')
 
         fps = stream.average_rate
         self.params = {
@@ -230,9 +231,13 @@ class RTSPVideoThread(BaseVideoThread):
             self.writer = skvideo.io.FFmpegWriter(str(self.output_path), outputdict=outputdict)
 
         self.barrier.wait()
-        logger.info(f"Stream {self.name} start reading at {time.time()}")
+        stream_start = time.time()
+        logger.info(f"Stream {self.name} start reading at {stream_start}")
 
         with open(os.path.join(self.output_dir,self.name +'.txt'),'w') as fp:
+            fp.write(f'Open 0 {stream_open}\n')
+            fp.write(f'Start 0 {stream_start}\n')
+            logger.info(f"Stream {self.name}: Frame: {frame_idx} PTS: {pts}, Time: {timestamp}")
             for frame_idx, frame in enumerate(self.container.decode(video=0)):
                 if self.stop_event.is_set():
                     break
