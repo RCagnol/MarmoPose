@@ -5,3 +5,5 @@ models
 demos
 data
 tools/record.py
+*.png
+*.mp4
