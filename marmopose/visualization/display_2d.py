@@ -48,7 +48,7 @@ class Visualizer2D:
         new_order = [1, 0, 4, 3, 2]
         self.track_color_list = [colors[i] if i < len(new_order) else colors[i] for i in new_order] + colors[len(new_order):]
 
-    def generate_videos_2d(self, file_names: list = None):
+    def generate_videos_2d(self, file_names: list = None, frames_indices: list = None):
         # TODO: Visualize specific video, visualize a certain range of frames
         if file_names is None:
             video_paths = sorted(self.videos_raw_dir.glob(f"*.mp4"))
@@ -64,23 +64,45 @@ class Visualizer2D:
             all_points_with_score_2d = np.concatenate((all_points_with_score_2d, gaze_points), axis = 3)
         with ThreadPoolExecutor() as executor:
             futures = []
-            for video_path, points_with_score_2d, bboxes in zip(video_paths, all_points_with_score_2d, all_bboxes):
-                output_path = self.videos_labeled_2d_dir / video_path.name
-                future = executor.submit(self.render_video_with_pose, video_path, points_with_score_2d, bboxes, output_path)
-                futures.append(future)
+            if frames_indices is None:
+                for video_path, points_with_score_2d, bboxes in zip(video_paths, all_points_with_score_2d, all_bboxes):
+                    output_path = self.videos_labeled_2d_dir / video_path.name
+                    future = executor.submit(self.render_video_with_pose, video_path, points_with_score_2d, bboxes, output_path)
+                    futures.append(future)
+            else:
+                for video_path, points_with_score_2d, bboxes, frames_idx in zip(video_paths, all_points_with_score_2d, all_bboxes, frames_indices):
+                    output_path = self.videos_labeled_2d_dir / video_path.name
+                    future = executor.submit(self.render_video_with_pose, video_path, points_with_score_2d, bboxes, output_path, frames_idx)
+                    futures.append(future)
+
             for future in as_completed(futures):
                 future.result()
     
-    def render_video_with_pose(self, video_path: Path, points_with_score_2d: np.ndarray, bboxes: np.ndarray, output_path: Path):
+    def render_video_with_pose(self, video_path: Path, points_with_score_2d: np.ndarray, bboxes: np.ndarray, output_path: Path, frames_idx : tuple = None):
         input_container = av.open(video_path)
         input_stream = input_container.streams.video[0]
         input_stream.thread_type = 'AUTO'
 
+        fps = input_stream.base_rate
+        time_base = input_stream.time_base
+        start_time = input_stream.start_time
+        start = frames_idx[0]
+        frames = input_container.decode(input_stream)
+        target_timestamp = int(start / fps / time_base) + start_time
+        input_container.seek(target_timestamp, stream=input_stream)
+        frames = input_container.decode(input_stream)
+        for frame in frames:
+            frame_no = int(frame.pts * time_base * fps)
+            if frame_no >= start - 1:
+                break
+
         writer = skvideo.io.FFmpegWriter(output_path, inputdict={'-framerate': str(input_stream.average_rate)},
                                          outputdict={'-vcodec': 'libx264', '-pix_fmt': 'yuv420p', '-preset': 'superfast', '-crf': '23'})
-
+        
         n_frames = points_with_score_2d.shape[1]
-        for frame_idx, frame in zip(trange(n_frames, ncols=100, desc=f'2D Visualizing {output_path.stem}', unit='frames'), input_container.decode(video=0)):
+
+        cnt = 0
+        for frame_idx, frame in zip(trange(n_frames, ncols=100, desc=f'2D Visualizing {output_path.stem}', unit='frames'), frames):
             # TODO: Try to add score to the visualization
             points_2d = points_with_score_2d[:, frame_idx, :, :2]  # (n_tracks, n_bodyparts, 2)
             bbox = bboxes[:, frame_idx]  # (n_tracks, 4)
@@ -89,7 +111,7 @@ class Visualizer2D:
             img = self.draw_pose_on_image(img, points_2d, bbox)
 
             writer.writeFrame(img)
-        
+            cnt += 1
         input_container.close()
         writer.close()
 
