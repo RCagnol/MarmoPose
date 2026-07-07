@@ -13,7 +13,8 @@ class Config:
         'calibration': {
             'board_type': 'checkerboard',
             'board_square_side_length': 45,
-            'fisheye': True
+            'fisheye': True,
+            'initial_focal_length': None
         },
         'animal': {
             'label_mapping': None
@@ -48,10 +49,17 @@ class Config:
         }
     }
 
-    def __init__(self, config_path: str, **kwargs: Any):
+    def __init__(self, config_path: str, sub_directory: dict = None, **kwargs: Any):
         self.config = self.load_config(config_path)
 
         self.override_config(self.config, **kwargs)
+
+        # Applied directly (bypassing override_config's flat key matching) because
+        # 'calibration' is ambiguous: it names both a sub_directory entry and the
+        # unrelated top-level board-settings section, so a kwarg-based override
+        # would silently clobber the board settings instead of the path.
+        if sub_directory:
+            self.config['sub_directory'].update(sub_directory)
 
         self.build_directory()
 

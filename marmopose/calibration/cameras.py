@@ -50,7 +50,8 @@ def triangulate_SVD(points: List[Tuple[float, float]], camera_mats: List[np.ndar
         mat = camera_mats[i]
         A[(i * 2):(i * 2 + 1)] = x * mat[2] - mat[0]
         A[(i * 2 + 1):(i * 2 + 2)] = y * mat[2] - mat[1]
-    _, _, vh = np.linalg.svd(A, full_matrices=True)
+    _, _, vh = np.linalg.svd(A, full_matrices=True)    
+
     p3d = vh[-1]
     p3d = p3d[:3] / p3d[3]
     return p3d
@@ -150,26 +151,36 @@ class Camera:
     def get_extrinsic_matrix(self):
         return get_extrinsic_matrix(self.rotation, self.translation)
     
-    def set_params(self, params):
+    def set_params(self, params, with_focal_length = True):
         self.set_rotation(params[0:3])
         self.set_translation(params[3:6])
-        self.set_focal_length(params[6])
+        if with_focal_length:
+            self.set_focal_length(params[6])
+            d = 0
+        else:
+            d = 1
 
         distortion = np.zeros(5)
-        distortion[0] = params[7]
+        distortion[0] = params[7 - d]
         if self.extra_distortion:
-            distortion[1] = params[8]
+            distortion[1] = params[8 - d]
         self.set_distortion(distortion)
 
-    def get_params(self):
-        params = np.zeros(8 + self.extra_distortion)
+    def get_params(self, with_focal_length = True):
+        if with_focal_length:
+            d = 0
+        else:
+            d = 1
+    
+        params = np.zeros(8 - d + self.extra_distortion)
         params[0:3] = self.get_rotation()
         params[3:6] = self.get_translation()
-        params[6] = self.get_focal_length()
+        if with_focal_length:
+            params[6] = self.get_focal_length()
         distortion = self.get_distortion()
-        params[7] = distortion[0]
+        params[7 - d] = distortion[0]
         if self.extra_distortion:
-            params[8] = distortion[1]
+            params[8 - d] = distortion[1]
         return params
     
     def resize_camera(self, scale: float) -> None:
@@ -489,7 +500,6 @@ class CameraGroup:
                         reproj_errors = np.linalg.norm(points_2d_reprojected[valid_indices, 0, :] - sub_points_distorted[valid_indices, :], axis=1)
 
                         mean_error = np.median(reproj_errors)
-
                         if mean_error < best_mean_error:
                             best_mean_error = mean_error
                             best_point_3d = points_3d
@@ -538,9 +548,10 @@ class CameraGroup:
     
 
     # TODO: Refractor the following functions
-    def calibrate_rows(self, all_rows, board, 
-                       init_intrinsics=True, init_extrinsics=True, verbose=True, **kwargs):
-        assert len(all_rows) == len(self.cameras), "Number of camera detections does not match number of cameras"
+    def calibrate_rows(self, all_rows, board,
+                       init_intrinsics=True, init_extrinsics=True, verbose=True,
+                       initial_focal_length=None, **kwargs):
+        assert len(all_rows) == len(self.cameras), f"Number of camera detections ({len(all_rows)}) does not match number of cameras ({len(self.cameras)})"
         for rows, camera in zip(all_rows, self.cameras):
             size = camera.get_size()
             assert size is not None, f"Camera with name {camera.get_name()} has no specified frame size"
@@ -551,7 +562,9 @@ class CameraGroup:
                 objp, imgp = zip(*mixed)
                 matrix = cv2.initCameraMatrix2D(objp, imgp, tuple(size))
                 logger.info(f'Intrinsic parameters found: {matrix}')
-                matrix = np.array([[1120,0,959.5],[0,1120,539.5],[0,0,1]])
+                if initial_focal_length is not None:
+                    cx, cy = (size[0] - 1) / 2, (size[1] - 1) / 2
+                    matrix = np.array([[initial_focal_length, 0, cx], [0, initial_focal_length, cy], [0, 0, 1]])
                 camera.set_camera_matrix(matrix)
 
         for i, (row, cam) in enumerate(zip(all_rows, self.cameras)):
@@ -710,12 +723,11 @@ class CameraGroup:
 
         if start_params is not None:
             x0 = start_params
-            n_cam_params = len(self.cameras[0].get_params())
+            n_cam_params = len(self.cameras[0].get_params(with_focal_length = False))
 
         error_fun = self._error_fun_bundle
 
         jac_sparse = self._jac_sparsity_bundle(p2ds, n_cam_params, extra)
-
         f_scale = threshold
         opt = optimize.least_squares(error_fun,
                                      x0,
@@ -730,11 +742,10 @@ class CameraGroup:
                                      max_nfev=max_nfev,
                                      args=(p2ds, n_cam_params, extra))
         best_params = opt.x
-
         for i, cam in enumerate(self.cameras):
             a = i * n_cam_params
             b = (i + 1) * n_cam_params
-            cam.set_params(best_params[a:b])
+            cam.set_params(best_params[a:b], with_focal_length = False)
 
         error = self.average_error(p2ds)
         return error
@@ -743,12 +754,11 @@ class CameraGroup:
         """Error function for bundle adjustment"""
         good = ~np.isnan(p2ds)
         n_cams = len(self.cameras)
-
         for i in range(n_cams):
             cam = self.cameras[i]
             a = i * n_cam_params
             b = (i + 1) * n_cam_params
-            cam.set_params(params[a:b])
+            cam.set_params(params[a:b], with_focal_length = False)
 
         n_cams = len(self.cameras)
         sub = n_cam_params * n_cams
@@ -769,7 +779,6 @@ class CameraGroup:
             errors_obj = 2 * (p3ds_test - expected).ravel() / min_scale
         else:
             errors_obj = np.array([])
-
         return np.hstack([errors_reproj, errors_obj])
 
 
@@ -854,7 +863,7 @@ class CameraGroup:
         where N is the number of points and C is the number of cameras,
         initializes the parameters for bundle adjustment"""
 
-        cam_params = np.hstack([cam.get_params() for cam in self.cameras])
+        cam_params = np.hstack([cam.get_params(with_focal_length = False) for cam in self.cameras])
         n_cam_params = len(cam_params) // len(self.cameras)
 
         total_cam_params = len(cam_params)
