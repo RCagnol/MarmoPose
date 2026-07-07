@@ -11,6 +11,7 @@ from tqdm import trange
 from marmopose.config import Config
 from marmopose.utils.data_io import load_points_3d_h5
 from marmopose.utils.helpers import get_color_list, MultiVideoCapture
+from marmopose.utils.geometry import Cone
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,6 @@ class Visualizer3D:
     def generate_video_3d(self, source_3d: str = 'original', start_frame_idx: int = 0, end_frame_idx: int = None, video_type: str = 'composite', fps: int = 25, file_names_2d: list = None):
         assert source_3d in ['original', 'optimized'], f'Invalid data source: {source_3d}'
         assert video_type in ['3d', 'composite'], f'Invalid video type: {video_type}'
-
         if source_3d == 'optimized':
             self.points_3d_path = self.points_3d_path.with_name('optimized.h5')
         self.video_labeled_3d_path = self.video_labeled_3d_path.with_name(f'{source_3d}_{video_type}.mp4')
@@ -60,7 +60,6 @@ class Visualizer3D:
         all_points_3d = load_points_3d_h5(self.points_3d_path)
         n_tracks, n_frames, n_bodyparts, _ = all_points_3d.shape
         self.initialize_3d(n_tracks, n_bodyparts, room_dimensions=self.room_dimensions)
-        # HERE WRITE NEW FUNCTION WHICH SET COORDINATES FOR 2ND POINT OF GAZE VECTOR
         if self.with_gaze:
             gaze_vectors = self.generate_gaze_vectors(all_points_3d)
             norm_gaze_vectors = np.sqrt(np.einsum('ijkl,ijkl -> ijk', gaze_vectors, gaze_vectors))[..., np.newaxis]
@@ -70,7 +69,7 @@ class Visualizer3D:
         writer = skvideo.io.FFmpegWriter(self.video_labeled_3d_path, inputdict={'-framerate': str(fps)},
                                         outputdict={'-vcodec': 'libx264', '-pix_fmt': 'yuv420p', '-preset': 'superfast', '-crf': '23'})
 
-        end_frame_idx = min(end_frame_idx if end_frame_idx is not None else n_frames, n_frames)
+        end_frame_idx = min(end_frame_idx) if end_frame_idx is not None else n_frames
         logger.info(f'Generating {video_type} video from frame {start_frame_idx} to {end_frame_idx}')
 
         if video_type == 'composite':
@@ -80,7 +79,6 @@ class Visualizer3D:
                 video_paths = sorted([self.videos_2d_dir / (file + '.mp4') for file in file_names_2d])
             mvc = MultiVideoCapture(video_paths, video_paths, do_cache=True, simulate_live=False, start_frame_idx=start_frame_idx, end_frame_idx=end_frame_idx)
             mvc.start()
-
         for frame_idx in trange(start_frame_idx, end_frame_idx, ncols=100, desc=desc_info, unit='frames'):
             img_3d = self.get_image_3d(all_points_3d[:, frame_idx]) # ~19ms
             if video_type == '3d':
@@ -305,5 +303,218 @@ class Visualizer3D:
         rightear_coordinates = all_points[:,:,point_rightear,:]
         middleear_coordinates = (leftear_coordinates + rightear_coordinates)/2
         return head_coordinates-middleear_coordinates
+
+    
+class Visualizer3DCombined:
+    def __init__(self, config: Config, room_dimensions: tuple, offsets: tuple, is_seen: tuple, joint_gaze: np.ndarray, with_gaze = False):
+        self.with_gaze = with_gaze
+        self.init_dir(config)
+        self.init_visual_cfg(config)
+        self.room_dimensions = room_dimensions
+        self.offsets = offsets
+        self.is_seen = is_seen
+        self.joint_gaze = joint_gaze
+
+    def init_dir(self, config):
+        self.config = config
+        self.points_3d_path = Path(config.sub_directory['points_3d']) / 'original.h5'
+        self.points_3d_path_home = Path(config.sub_directory['points_3d']) / 'original_home.h5'
+        self.video_labeled_3d_path = Path(config.sub_directory['videos_labeled_3d']) / 'original_combined.mp4'
+    
+    def init_visual_cfg(self, config):
+        bodyparts = config.animal['bodyparts']
+        skeleton = config.visualization['skeleton']
+        self.skeleton_indices = [[bodyparts.index(bp) for bp in line] for line in skeleton]
+        self.skeleton_color_list = get_color_list(config.visualization['skeleton_cmap'], number=len(skeleton), cvtInt=False)
+
+        # TODO: The order is specified to be consistent with the marmoset dataset
+        colors = get_color_list(config.visualization['track_cmap'], cvtInt=False)
+        new_order = [1, 0, 4, 3, 2]
+        self.track_color_list = [colors[i] if i < len(new_order) else colors[i] for i in new_order] + colors[len(new_order):]
+        self.color_seen = (1, 0, 0)
+    
+    def generate_video_3d(self, source_3d: str = 'original', start_frame_idx: int = 0, end_frame_idx: int = None, fps: int = 25):
+        assert source_3d in ['original', 'optimized'], f'Invalid data source: {source_3d}'
+
+        if source_3d == 'optimized':
+            self.points_3d_path = self.points_3d_path.with_name('optimized.h5')
+            self.points_3d_path_home = self.points_3d_path.with_name('optimized_home.h5')
+        self.video_labeled_3d_path = self.video_labeled_3d_path.with_name(f'{source_3d}_combined.mp4')
+        if not (start_frame_idx == 0 and end_frame_idx is None):
+            self.video_labeled_3d_path = self.video_labeled_3d_path.with_name(f'{self.video_labeled_3d_path.stem}_{start_frame_idx}_{end_frame_idx}.mp4')
+        desc_info = f'Visualizing combined video... '
+
+        points_3d_etho = load_points_3d_h5(self.points_3d_path)
+        points_3d_home = load_points_3d_h5(self.points_3d_path_home)
+        duration = np.min((points_3d_etho.shape[1],points_3d_home.shape[1]))
+        all_points_3d = np.concatenate((points_3d_etho[:, :duration, :], points_3d_home[:, :duration, :]), axis=0)
+        is_seen = np.concatenate((self.is_seen[0][None, ...], self.is_seen[1][None, ...]), axis=0).transpose((0,2,1))
+        n_tracks, n_frames, n_bodyparts, _ = all_points_3d.shape
+
+        self.initialize_3d(n_tracks, n_bodyparts)
+        gaze_vectors = self.generate_gaze_vectors(all_points_3d)
+        writer = skvideo.io.FFmpegWriter(self.video_labeled_3d_path, inputdict={'-framerate': str(fps)},
+                                        outputdict={'-vcodec': 'libx264', '-pix_fmt': 'yuv420p', '-preset': 'superfast', '-crf': '23'})
+
+        end_frame_idx = min(end_frame_idx if end_frame_idx is not None else n_frames, n_frames)
+        logger.info(f'Generating combined video from frame {start_frame_idx} to {end_frame_idx}')
+        for frame_idx in trange(start_frame_idx, end_frame_idx, ncols=100, desc=desc_info, unit='frames'):
+            img_3d = self.get_image_3d(all_points_3d[:, frame_idx], gaze_vectors[:, frame_idx, 0], is_seen[:,frame_idx], self.joint_gaze[frame_idx]) # ~19ms
+            
+            writer.writeFrame(img_3d)
+
+        writer.close()
+        self.vis.destroy_window()
+
+    def initialize_3d(self, n_tracks: int, n_bodyparts: int, width: int = WIDTH_3D * 2, height: int = HEIGHT_3D):
+        self.vis = o3d.visualization.Visualizer()
+        self.vis.create_window(width=width, height=height, visible=False)
+
+        opt = self.vis.get_render_option()
+        opt.point_size = 7
+        opt.light_on = False
+
+        self.draw_room_grids(self.vis, *self.offsets[0], *self.room_dimensions[0])
+        self.draw_room_grids(self.vis, *self.offsets[1], *self.room_dimensions[1])
+
+        lines_list = []
+        for indices in self.skeleton_indices:
+            lines_list.extend([[indices[i], indices[i+1]] for i in range(len(indices)-1)])
+
+        line_colors = []
+        for idx, indices in enumerate(self.skeleton_indices):
+            color = self.skeleton_color_list[idx]
+            color = np.array(color) / 255.0 if np.max(color) > 1 else np.array(color)
+
+            line_colors.extend([color for _ in range(len(indices)-1)])
+
+         
+
+        self.point_clouds, self.line_sets, self.cones = [], [], []
+        for track_idx in range(n_tracks):
+            points = o3d.geometry.PointCloud()
+            points.points = o3d.utility.Vector3dVector(np.zeros((n_bodyparts, 3)))
+            color = self.track_color_list[track_idx]
+            color = np.array(color) / 255.0 if np.max(color) > 1 else np.array(color)
+            points.colors = o3d.utility.Vector3dVector(np.tile(color, (n_bodyparts, 1)))
+            self.vis.add_geometry(points)
+            self.point_clouds.append(points)
+            
+            lines = o3d.geometry.LineSet()
+            lines.points = points.points
+            lines.lines = o3d.utility.Vector2iVector(lines_list)
+            lines.colors = o3d.utility.Vector3dVector(line_colors)
+            self.vis.add_geometry(lines)
+            self.line_sets.append(lines)
+ 
+            cone = Cone((0,0,0), (0,0,1), 2000, 10, with_mesh = True)
+            self.vis.add_geometry(cone.get_mesh())
+            self.cones.append(cone)
+
+
+        ctr = self.vis.get_view_control()
+        ctr.set_lookat([400, -400, 0])
+        ctr.set_front([1, 1, 1.1])
+        ctr.set_up([0, 0, 1])
+        ctr.set_zoom(0.6)
+    
+    def get_image_3d(self, all_points: np.ndarray, gaze_vectors: np.ndarray, is_seen: np.ndarray, joint_gaze: bool) -> np.ndarray:
+        for points, gaze_vector, point_cloud, line_set, cone, is_seen, sees_other, track_idx in zip(all_points, gaze_vectors, self.point_clouds, self.line_sets, self.cones, is_seen, is_seen[::-1], range(all_points.shape[0])):
+            point_cloud.points = o3d.utility.Vector3dVector(points)
+            new_color = np.tile(self.track_color_list[track_idx], (points.shape[0], 1))
+            new_color[is_seen, :] = self.color_seen
+            point_cloud.colors = o3d.utility.Vector3dVector(new_color)
+            self.vis.update_geometry(point_cloud)
+            line_set.points = point_cloud.points
+            self.vis.update_geometry(line_set)
+
+            idx_head = self.config.animal['bodyparts'].index('head')
+            head_point = points[idx_head, :]
+            cone.update(head_point, gaze_vector)
+            if joint_gaze:
+                cone.update_color((0,1,0))
+            else:
+                cone.update_color()
+            if np.sum(sees_other) > 0:
+                cone.update_color((0,0,1))
+            else:
+                cone.update_color()
+            self.vis.update_geometry(cone.get_mesh())
+
+        self.vis.poll_events()
+        self.vis.update_renderer()
+
+        img = np.asarray(self.vis.capture_screen_float_buffer(False))
+        img = (img * 255).astype(np.uint8)
+        return img
+
+    @staticmethod
+    def draw_room_grids(vis: o3d.visualization.Visualizer, origin_x: float, origin_y: float, origin_z: float, width: int, length: int, height: int, grid_size: int) -> None:
+        """
+        Draw grids on the room floor and walls.
+
+        Args:
+            vis: Open3D visualizer.
+            width: Width of the room along the x-axis.
+            length: Length of the room along the y-axis.
+            height: Height of the room along the z-axis.
+            grid_size: Size of the grid squares.
+        """
+        points = []
+        lines = []
+        idx = 0
+
+        grid_color = [0, 0, 0]
+        colors = []
+
+        points.append([origin_x, origin_y, origin_z])
+        points.append([origin_x + width, origin_y, origin_z])
+        lines.append([0, 1])
+        colors.append(grid_color)
+        points.append([origin_x, origin_y + length, origin_z])
+        lines.append([0, 2])
+        colors.append(grid_color)
+        points.append([origin_x  + width, origin_y + length, origin_z])
+        lines.append([1, 3])
+        colors.append(grid_color)
+        lines.append([2, 3])
+        colors.append(grid_color)
+        points.append([origin_x, origin_y, origin_z + height])
+        lines.append([0, 4])
+        colors.append(grid_color)
+        points.append([origin_x + width, origin_y, origin_z + height])
+        lines.append([1, 5])
+        colors.append(grid_color)
+        points.append([origin_x, origin_y + length, origin_z + height])
+        lines.append([2, 6])
+        colors.append(grid_color)
+        points.append([origin_x + width, origin_y + length, origin_z + height])
+        lines.append([3, 7])
+        colors.append(grid_color)
+        lines.append([4, 5])
+        colors.append(grid_color)
+        lines.append([4, 6])
+        colors.append(grid_color)
+        lines.append([5, 7])
+        colors.append(grid_color)
+        lines.append([6, 7])
+        colors.append(grid_color)
+
+        # Create LineSet for room grids
+        room_grid = o3d.geometry.LineSet()
+        room_grid.points = o3d.utility.Vector3dVector(points)
+        room_grid.lines = o3d.utility.Vector2iVector(lines)
+        room_grid.colors = o3d.utility.Vector3dVector(colors)
+        vis.add_geometry(room_grid)
+
+    def generate_gaze_vectors(self, all_points: np.ndarray):
+        point_head = np.nonzero(np.array(self.config.animal["bodyparts"]) == "head")[0]
+        point_leftear = np.nonzero(np.array(self.config.animal["bodyparts"]) == "leftear")[0]
+        point_rightear = np.nonzero(np.array(self.config.animal["bodyparts"]) == "rightear")[0]
+        head_coordinates = all_points[:,:,point_head,:]
+        leftear_coordinates = all_points[:,:,point_leftear,:]
+        rightear_coordinates = all_points[:,:,point_rightear,:]
+        middleear_coordinates = (leftear_coordinates + rightear_coordinates)/2
+        return head_coordinates - middleear_coordinates
 
     
