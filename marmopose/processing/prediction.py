@@ -1,7 +1,9 @@
 import logging
+import queue
+import threading
 from pathlib import Path
 from collections import defaultdict
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 import torch
 import torch.nn as nn
@@ -150,52 +152,75 @@ class Predictor:
             self.pose_dataset_meta = parse_pose_metainfo(dict(from_file=data_meta_cfg))
             self.use_deployed_pose = True
     
-    def predict(self, vid_path: str = None) -> None:
+    def predict(self, vid_path: str = None, frames_indices : list = None) -> None:
         """ 
         Predict 2D poses for all videos in the raw video directory or the given video path. 
         
         Args:
             vid_path: The path to the video file to predict 2D poses for. If not provided, all videos in the raw video directory will be processed.
+            frames_indices: List of tuples defining first and last frame to process for each video
         """
         if vid_path:
-            self.predict_video(vid_path)
+            self.predict_video(vid_path, frames_indices[0])
             self.file_names.append(str(vid_path.stem))
         else:
             video_paths = sorted(self.videos_raw_dir.glob(f"*.mp4"))
-            for video_path in video_paths:
-                self.predict_video(str(video_path))
+            for video_path, frames_idx in zip(video_paths, frames_indices):
+                self.predict_video(str(video_path), frames_idx)
                 self.file_names.append(str(video_path.stem))
     
-    def predict_video(self, video_path: str) -> None:
+    def predict_video(self, video_path: str, frames_idx : tuple = None) -> None:
         """ 
         Predict 2D poses for the given video. 
         
         Args:
             video_path: The path to the video file to predict 2D poses for.
+            frames_idx: Tuple defining first and last frame to process
         """
         logger.info(f'Predicting 2D poses for: {video_path}')
-
         cap = cv2.VideoCapture(video_path)
-        n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
+        n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) - frames_idx[0] + frames_idx[1]
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frames_idx[0])
+        
         points_with_score_2d = []
         bboxes = []
 
-        with trange(n_frames, ncols=100, desc='Predicting ... ', unit='frames') as progress_bar:
-            frames_processed = 0
-            while frames_processed < n_frames:
-                batch_frames = self.prepare_batch_frames(cap, self.batch_size)
-                if not batch_frames: break
-                
-                points_with_score_2d_batch, bboxes_batch = self.predict_image_batch(batch_frames)
-                points_with_score_2d.extend(points_with_score_2d_batch)
-                bboxes.extend(bboxes_batch)
-                
-                n_processed = len(batch_frames)
-                frames_processed += n_processed
-                progress_bar.update(n_processed)
+        # `_batch_producer` runs on a background thread: it only reads frames and builds
+        # the detector's CPU-side input tensors (no GPU calls), and pushes them to
+        # `batch_queue`. This main thread pulls a ready batch and does the GPU work, so
+        # the next batch's CPU prep overlaps with this batch's GPU time instead of the
+        # two running back-to-back. Queue is bounded so the producer can't run more than
+        # ~1 batch ahead of a slower consumer.
+        batch_queue = queue.Queue(maxsize=2)
+        stop_event = threading.Event()
+        producer_thread = threading.Thread(
+            target=self._batch_producer, args=(cap, batch_queue, stop_event), daemon=True
+        )
+        producer_thread.start()
 
-        cap.release()
+        try:
+            with trange(n_frames, ncols=100, desc='Predicting ... ', unit='frames') as progress_bar:
+                frames_processed = 0
+                while frames_processed < n_frames:
+                    item = batch_queue.get()  # blocks until the producer has the next batch ready
+
+                    if item is None:  # producer reached end of video
+                        break
+                    if isinstance(item, Exception):  # producer hit an error; re-raise on main thread
+                        raise item
+
+                    batch_frames, det_data_batch = item
+                    points_with_score_2d_batch, bboxes_batch = self.predict_image_batch(batch_frames, det_data_batch=det_data_batch)
+                    points_with_score_2d.extend(points_with_score_2d_batch)
+                    bboxes.extend(bboxes_batch)
+
+                    n_processed = len(batch_frames)
+                    frames_processed += n_processed
+                    progress_bar.update(n_processed)
+        finally:
+            stop_event.set()
+            producer_thread.join()
+            cap.release()
 
         points_with_score_2d = np.array(points_with_score_2d).transpose(1, 0, 2, 3)
         bboxes = np.array(bboxes).transpose(1, 0, 2)
@@ -226,12 +251,62 @@ class Predictor:
         
         return batch_frames
 
-    def predict_image_batch(self, imgs: List[np.ndarray]):
+    def _batch_producer(self, cap, out_queue: queue.Queue, stop_event: threading.Event) -> None:
+        """
+        Runs on a background thread (started in `predict_video`). Reads frames and builds
+        the detector's CPU-side input tensors ahead of time, so that work is already done
+        by the time the main thread is ready to run the GPU steps on it.
+
+        Only touches things private to this thread (`cap`, its own pipeline objects) plus
+        `out_queue`, which is thread-safe -- so nothing here needs a lock.
+        """
+        try:
+            while not stop_event.is_set():
+                batch_frames = self.prepare_batch_frames(cap, self.batch_size)
+                if not batch_frames:
+                    break
+
+                # For the deployed (TensorRT) detector, input-building happens as part of
+                # `detector_predict_deployed` itself, so there's nothing to prefetch here.
+                det_data_batch = None if self.use_deployed_det else build_det_inputs(self.detector, batch_frames)
+
+                if not self._put_until_stopped(out_queue, (batch_frames, det_data_batch), stop_event):
+                    return  # consumer told us to stop (e.g. it only wanted the first N frames)
+        except Exception as e:
+            self._put_until_stopped(out_queue, e, stop_event)
+            return
+
+        self._put_until_stopped(out_queue, None, stop_event)  # sentinel: no more batches
+
+    @staticmethod
+    def _put_until_stopped(out_queue: queue.Queue, item, stop_event: threading.Event, poll_interval: float = 0.1) -> bool:
+        """
+        Like `out_queue.put(item)`, but re-checks `stop_event` every `poll_interval` seconds
+        instead of blocking forever. Needed because `predict_video`'s consumer loop can stop
+        pulling from the queue before the video ends (it only wants `n_frames` frames, which
+        is often less than the full file) -- without this, a plain blocking `put()` on an
+        already-full queue would never return once nobody is left to drain it, and the
+        producer thread would hang forever waiting to hand off a batch nobody wants.
+
+        Returns False if `stop_event` fired before the item could be placed, True otherwise.
+        """
+        while not stop_event.is_set():
+            try:
+                out_queue.put(item, timeout=poll_interval)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def predict_image_batch(self, imgs: List[np.ndarray], det_data_batch: Optional[dict] = None):
         """
         Predict keypoints and bounding boxes for a batch of images.
 
         Args:
             imgs: A list of images, where each image is represented as a numpy.ndarray.
+            det_data_batch: Optional pre-built detector input tensors for `imgs` (as produced
+                by `build_det_inputs`), e.g. from `_batch_producer`. If omitted, it's built
+                here instead. Ignored when using the deployed (TensorRT) detector.
 
         Returns:
             A tuple containing two lists:
@@ -239,7 +314,9 @@ class Predictor:
             - bboxes_batch: A list of bounding boxes for each image, with each bounding box described by its coordinates and score.
         """
         if not self.use_deployed_det:
-            det_results = detector_predict(self.detector, imgs)
+            if det_data_batch is None:
+                det_data_batch = build_det_inputs(self.detector, imgs)
+            det_results = run_detector(self.detector, det_data_batch)
         else:
             det_results = detector_predict_deployed(self.det_model_deployed, self.det_task_processor, self.det_input_shape, imgs)
 
@@ -383,16 +460,19 @@ class Predictor:
         return points_with_score_2d_per_frame, bboxes_per_frame
 
 
-def detector_predict(model: nn.Module, imgs: List[np.ndarray]) -> List[DetDataSample]:
+def build_det_inputs(model: nn.Module, imgs: List[np.ndarray]) -> dict:
     """
-    Perform detection on a batch of images using the given model.
+    CPU-only: run the detector's preprocessing pipeline (resize/normalize/etc.) on a batch
+    of images and collate them into the input dict `model.test_step` expects. Split out of
+    `detector_predict` so this part can be run ahead of time on a background thread while
+    the GPU is busy with a previous batch (see `Predictor._batch_producer`).
 
     Args:
         model: The detection model.
         imgs: A list of images.
 
     Returns:
-        A list of detection data samples.
+        A dict with 'inputs' and 'data_samples', ready to pass to `run_detector`.
     """
     test_pipeline = get_test_pipeline_cfg(model.cfg)
     if isinstance(imgs[0], np.ndarray):
@@ -407,10 +487,30 @@ def detector_predict(model: nn.Module, imgs: List[np.ndarray]) -> List[DetDataSa
         data_batch['inputs'].append(data_['inputs'])
         data_batch['data_samples'].append(data_['data_samples'])
 
+    return data_batch
+
+
+def run_detector(model: nn.Module, data_batch: dict) -> List[DetDataSample]:
+    """ GPU step: run the detector's forward pass on inputs already built by `build_det_inputs`. """
     with torch.no_grad():
         results = model.test_step(data_batch)
 
     return results
+
+
+def detector_predict(model: nn.Module, imgs: List[np.ndarray]) -> List[DetDataSample]:
+    """
+    Perform detection on a batch of images using the given model.
+
+    Args:
+        model: The detection model.
+        imgs: A list of images.
+
+    Returns:
+        A list of detection data samples.
+    """
+    data_batch = build_det_inputs(model, imgs)
+    return run_detector(model, data_batch)
 
 
 def pose_topdown_predict(model: nn.Module, imgs: List[np.ndarray], bboxes_list: List[np.ndarray] = None) -> List[PoseDataSample]:
