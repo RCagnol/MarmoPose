@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from marmopose.calibration.cameras import CameraGroup
-from marmopose.calibration.boards import Checkerboard
+from marmopose.calibration.boards import Checkerboard, CharucoBoard
 from marmopose.utils.data_io import load_axes
 from marmopose.utils.helpers import orthogonalize_vector
 from marmopose.config import Config
@@ -35,6 +35,7 @@ class Calibrator:
     def calibrate(self):
         cam_names, video_list = self.get_video_list(self.calib_video_paths)
         board = self.get_calibration_board(self.config)
+        print(board)
 
         if not self.output_path.exists():
             detected_file = self.calibration_path / 'detected_boards.pickle'
@@ -51,11 +52,12 @@ class Calibrator:
             cgroup = CameraGroup.from_names(cam_names, self.config.calibration['fisheye'])
             cgroup.set_camera_sizes_videos(video_list)
 
-            cgroup.calibrate_rows(all_rows, board, 
-                                 init_intrinsics=True, init_extrinsics=True, 
-                                 n_iters=10, start_mu=15, end_mu=1, 
-                                 max_nfev=200, ftol=1e-5, 
-                                 n_samp_iter=500, n_samp_full=1000, 
+            cgroup.calibrate_rows(all_rows, board,
+                                 init_intrinsics=True, init_extrinsics=True,
+                                 initial_focal_length=self.config.calibration['initial_focal_length'],
+                                 n_iters=10, start_mu=15, end_mu=1,
+                                 max_nfev=200, ftol=1e-5,
+                                 n_samp_iter=500, n_samp_full=1000,
                                  error_threshold=2.5, verbose=True)
         else:
             logger.info(f'Calibration result already exists in: {self.output_path}')
@@ -111,12 +113,22 @@ class Calibrator:
     
     @staticmethod
     def get_calibration_board(config: Config) -> Checkerboard:
+        print(config.calibration)
+        board_type = config.calibration['board_type']
         board_size = config.calibration['board_size']
         square_length = config.calibration['board_square_side_length']
-
-        return Checkerboard(squaresX=board_size[0], 
-                            squaresY=board_size[1], 
-                            square_length=square_length)
+        marker_length = config.calibration['marker_length']
+        if board_type == 'checkerboard':
+            return Checkerboard(squaresX=board_size[0], 
+                                squaresY=board_size[1], 
+                                square_length=square_length)
+        elif board_type == 'charuco':
+            return CharucoBoard(squaresX=board_size[0],
+                                squaresY=board_size[1],
+                                square_length=square_length,
+                                marker_length=marker_length)
+        else:
+            raise ValueError("board_type has to be either checkerboard or charuco") 
     
     @staticmethod
     def get_rows_videos(video_list, board):
@@ -143,8 +155,23 @@ class Calibrator:
             T = construct_transformation_matrix(camera_group, axes)
             for camera in camera_group.cameras:
                 update_camera_parameters(camera, T)
+            test_updated_axes(camera_group, axes)
 
+def test_updated_axes(camera_group, axes):
+    offset = np.array(axes['offset'])
+    cam_names = [key for key in axes.keys() if not key in ['offset','order']]
+    axes_2d = np.array([axes[cam_name][:3] for cam_name in cam_names], dtype=np.float32)
+    
+    sub_camera_group = camera_group.subset_cameras_names(cam_names)
 
+    if len(axes[cam_names[0]]) == 4:
+        axes_3d = sub_camera_group.triangulate_ransac(axes_2d, undistort=True)
+        offset_point_coords = np.array([axes[cam_name][3] for cam_name in cam_names], dtype=np.float32)[:, None, :]
+        offset_point_3d = sub_camera_group.triangulate_ransac(offset_point_coords, undistort=True)
+
+    else:
+        axes_3d = sub_camera_group.triangulate(axes_2d, undistort=True) - offset
+    
 def update_camera_parameters(camera, T):
     # Update the rotation vector
     old_R, _ = cv2.Rodrigues(camera.get_rotation())
@@ -161,18 +188,23 @@ def update_camera_parameters(camera, T):
 
 def construct_transformation_matrix(camera_group, axes):
     offset = np.array(axes['offset'])
-    cam_names = [key for key in axes.keys() if key != ['offset','order']]
-    axes_2d = np.array([axes[cam_name] for cam_name in cam_names], dtype=np.float32)
+    cam_names = [key for key in axes.keys() if not key in ['offset','order']]
+    axes_2d = np.array([axes[cam_name][:3] for cam_name in cam_names], dtype=np.float32)
     
     sub_camera_group = camera_group.subset_cameras_names(cam_names)
-    axes_3d = sub_camera_group.triangulate(axes_2d, undistort=True) - offset
+    axes_3d = sub_camera_group.triangulate(axes_2d, undistort=True)
+
+    if len(axes[cam_names[0]]) == 4:
+        offset_point_coords = np.array([axes[cam_name][3] for cam_name in cam_names], dtype=np.float32)[:, None, :]
+        origin = sub_camera_group.triangulate(offset_point_coords, undistort=True)[0]
+    else:
+        origin = axes_3d[0]
 
     new_x_axis = axes_3d[1] - axes_3d[0]
     new_y_axis = orthogonalize_vector(axes_3d[2] - axes_3d[0], new_x_axis)
     new_z_axis = np.cross(new_x_axis, new_y_axis)
-    
+
     if 'order' in axes.keys():
-        print('ORDER WORKED')
         R = np.vstack([new_x_axis, new_y_axis, new_z_axis])[axes['order'],:]
     else:
         R = np.vstack([new_x_axis, new_y_axis, new_z_axis])
@@ -181,7 +213,7 @@ def construct_transformation_matrix(camera_group, axes):
     # Construct transformation matrix
     T = np.eye(4)
     T[:3, :3] = R
-    T[:3, 3] = -R @ axes_3d[0]
+    T[:3, 3] = -R @ (origin - offset.T @ R) 
 
     return T
 

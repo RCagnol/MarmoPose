@@ -16,9 +16,12 @@ animal:
 
 calibration:
   n_cameras: 4
+  board_type: 'checkerboard' # checkerboard or charuco
   board_size: [11, 8]
   board_square_side_length: 20 # mm
+  marker_length: 12 # mm
   fisheye: false
+  initial_focal_length: 1120 # pixels, initial guess for intrinsic calibration
 
 
 visualization:
