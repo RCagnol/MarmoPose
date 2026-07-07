@@ -296,7 +296,7 @@ class MultiVideoCapture:
             try:
                 frame = q.get(timeout=timeout)
                 frames.append(frame)
-            except Exception:
+            except Exception as e:
                 return None
         return frames
     

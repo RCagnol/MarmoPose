@@ -6,6 +6,8 @@ from typing import Dict
 import h5py
 import numpy as np
 
+from marmopose.calibration.cameras import CameraGroup
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,6 +24,19 @@ def load_axes(file_path: str) -> Dict:
     with open(file_path, 'r') as f:
         data_dict = json.load(f)
     return data_dict
+
+def get_offset_from_point(calibPath, suffix_single = None, suffix_both = 'both'):
+    suffix_single = '' if suffix_single is None else f'_{suffix_single}'
+    suffix_both = '' if suffix_both is None else f'_{suffix_both}'
+    axes = load_axes(calibPath / f"axes{suffix_single}.json")
+    camera_group = CameraGroup.load_from_json(calibPath / f"camera_params{suffix_both}.json")
+    cam_names = [key for key in axes.keys() if not key in ['offset','order']]
+    sub_camera_group = camera_group.subset_cameras_names(cam_names)
+    offset_point_coords = np.array([axes[cam_name][3] for cam_name in cam_names], dtype=np.float32)[:, None, :]
+    offset_point_3d = sub_camera_group.triangulate_ransac(offset_point_coords, undistort=True)[0]
+    offset = np.array(axes['offset'], dtype=np.float32)
+    return offset_point_3d - offset
+
 
 
 def save_points_bboxes_2d_h5(points: np.ndarray, bboxes: np.ndarray, name: str, file_path: Path) -> None:
