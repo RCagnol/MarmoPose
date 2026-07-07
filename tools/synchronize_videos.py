@@ -1,5 +1,7 @@
 import sys
 import os
+import shutil
+from pathlib import Path
 from contextlib import ExitStack
 import numpy as np
 import cv2
@@ -21,6 +23,10 @@ txt_files = [file for file in os.listdir(DIR) if file[-4:] == '.txt']
 camera_names = [file[:-4] for file in txt_files]
 txt_paths = [os.path.join(DIR, txt_file) for txt_file in txt_files]
 modes = ['r' for _ in camera_names]
+json_files = [file for file in os.listdir(DIR) if file[-5:] == '.json']
+
+for json_file in json_files:
+    shutil.copy(Path(DIR) / json_file, PREPROCESSED_DIR)
 
 # 2D Array storing the frame indices from the original videos, placed here according to their index in the reordered video
 # Nan values indicate that the frame at this index should be a black frame
@@ -34,9 +40,13 @@ finished = [False for _ in camera_names]
 with ExitStack() as stack:
     files = [stack.enter_context(open(fname, mode)) for fname, mode in zip(txt_paths, modes)]
 
-    # Read the first line for each .txt file
-    frames_pts = np.array([file.readline().strip().split(' ')[1] for file in files]).astype(float)
 
+    # Read the first line for each .txt file
+    streams_open = np.array([file.readline().strip().split(' ')[2] for file in files]).astype(float)
+    streams_start = np.array([file.readline().strip().split(' ')[2] for file in files]).astype(float)
+    frames_pts = np.array([file.readline().strip().split(' ')[1] for file in files]).astype(float)
+    jitter_open = (streams_open - np.min(streams_open)) * 90000 # 90000 to convert to pts
+    frames_pts += jitter_open
     current_frame = 0
     # Get first PTS
     first_pts = np.min(frames_pts)
@@ -67,12 +77,10 @@ with ExitStack() as stack:
             # Read newline in .txt, if it's the last line then update the finished list
             newline = files[idx].readline()
             if newline:
-                frames_pts[idx] = int(newline.strip().split(' ')[1])
+                frames_pts[idx] = int(newline.strip().split(' ')[1]) + jitter_open[idx]
             else:
                 frames_pts[idx] = np.nan
                 finished[idx] = True
-
-
 
         current_frame += 1
 
@@ -93,6 +101,7 @@ else:
 for i, camera_name in enumerate(camera_names):
     print(f'Null frames for {camera_name}: {np.nonzero(np.isnan(reordered_frames_stripped[i,:]))[0]}')
 print(reordered_frames_stripped.shape)
+
 def worker(camera_idx):
     camera_name = camera_names[camera_idx]
     input_container = av.open(os.path.join(DIR,camera_name + '.mp4'), mode='r')
@@ -122,8 +131,9 @@ def worker(camera_idx):
                 frames = input_container.decode(input_stream)
             try:
                 frame = next(frames)
-                while frame.pts * time_base * 25 != idx_frame:
+                while frame.pts * time_base * fps < idx_frame:
                     frame = next(frames)
+
                 if frame.key_frame or not prev_lost:
                     frame = frame.to_ndarray(format='rgb24')
                     prev_lost = False
