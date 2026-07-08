@@ -17,6 +17,14 @@ def orthonormal_basis(u):
     w = np.cross(u, v)
     return u, v, w
 
+def orthogonalize_vector(u: np.ndarray, v: np.ndarray) -> np.ndarray:
+    return u - project_vector(v, u)
+
+
+def project_vector(u: np.ndarray, v: np.ndarray) -> np.ndarray:
+    return u * np.dot(v, u) / np.dot(u, u)
+
+
 def rotation_matrix_rodrigues(or_dir, new_dir):
     """
     Compute rotation matrix using Rodrigues' formula.

@@ -15,7 +15,7 @@ import numpy as np
 from marmopose.calibration.cameras import CameraGroup
 from marmopose.calibration.boards import Checkerboard, CharucoBoard
 from marmopose.utils.data_io import load_axes
-from marmopose.utils.helpers import orthogonalize_vector
+from marmopose.utils.geometry import orthogonalize_vector
 from marmopose.config import Config
 
 logger = logging.getLogger(__name__)

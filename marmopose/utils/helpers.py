@@ -81,14 +81,6 @@ def get_video_params(video_path: Path) -> Dict[str, Union[int, float]]:
     return params
 
 
-def orthogonalize_vector(u: np.ndarray, v: np.ndarray) -> np.ndarray:
-    return u - project_vector(v, u)
-
-
-def project_vector(u: np.ndarray, v: np.ndarray) -> np.ndarray:
-    return u * np.dot(v, u) / np.dot(u, u)
-
-
 class BaseVideoThread(threading.Thread):
     def __init__(self, path, name, frame_queue, stop_event, barrier, do_cache=True, output_dir=None):
         super().__init__()
