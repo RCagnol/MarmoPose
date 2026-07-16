@@ -17,8 +17,7 @@ from marmopose.visualization import display_3d
 from marmopose.visualization.display_3d import Visualizer3D, Visualizer3DCombined
 from marmopose.processing.triangulation import Reconstructor3D
 from marmopose.utils.data_io import get_offset_from_point, load_points_3d_h5
-from marmopose.utils.geometry import points_in_cone, cones_intersect
-from marmopose.utils.plotting import plot_heatmaps, plot_distribution_distance
+from marmopose.utils.analysis import remove_absurd_3d_data, export_session_data, read_cage_sessions
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -47,6 +46,8 @@ both = cage1 == 'both' or cage1 == 'full'
 
 VIDEO_DIR = Path('/srv/MarmOT/VideoTracking/Videos/')
 SCRATCH_OUTPUT_DIR = Path('/scratch/VideoTracking/Videos/')
+# Accumulates one row per session per animal, across all recording directories/dates.
+CSV_DIR = Path('/srv/MarmOT/ISCMJ/Video_data')
 home_dimensions = [1200, 815, 900, 30]
 etho_dimensions = [660, 560, 800, 30]
 
@@ -152,86 +153,61 @@ def run_pipeline_on_dir(src_dir, dist_dir, det_model, pose_model, config, shift_
             pass
 
 
-def run_pipeline_on_dir_combined(etho_dir, home_dir, output_dir):
-    if False:
-        run_pipeline_on_dir(etho_dir, output_dir / 'Etho', det_model_etho, pose_model_etho, config_etho, None, skip_2d_if_present = skip_2d_if_present, suffix_3d = 'both', skip_visualization = False)
-        run_pipeline_on_dir(home_dir, output_dir / 'Home', det_model_home, pose_model_home, config_home, None, skip_2d_if_present = skip_2d_if_present, suffix_3d = 'both', skip_visualization = False)
-        return
-    else:
+def run_pipeline_on_dir_combined(etho_dir, home_dir, output_dir, session, names_etho_home, skip_visualization = False):
+    name_etho, name_home = names_etho_home
 
-        etho_points_3d_path = output_dir / 'Etho' / 'Output'/ 'points_3d_both' / 'optimized.h5'
-        home_points_3d_path = output_dir / 'Home' / 'Output'/ 'points_3d_both' / 'optimized.h5'
+    etho_points_3d_path = output_dir / 'Etho' / 'Output'/ 'points_3d_both' / 'optimized.h5'
+    home_points_3d_path = output_dir / 'Home' / 'Output'/ 'points_3d_both' / 'optimized.h5'
 
-        shutil.copy(etho_points_3d_path, Path(config_etho.sub_directory['points_3d']) / 'optimized.h5')
-        shutil.copy(home_points_3d_path, Path(config_etho.sub_directory['points_3d']) / 'optimized_home.h5')
+    shutil.copy(etho_points_3d_path, Path(config_etho.sub_directory['points_3d']) / 'optimized.h5')
+    shutil.copy(home_points_3d_path, Path(config_etho.sub_directory['points_3d']) / 'optimized_home.h5')
 
-        offset_etho = get_offset_from_point(etho_dir / 'Calib_preprocessed')
-        offset_home = get_offset_from_point(home_dir / 'Calib_preprocessed')
+    offset_etho = get_offset_from_point(etho_dir / 'Calib_preprocessed')
+    offset_home = get_offset_from_point(home_dir / 'Calib_preprocessed')
 
-        output_combined_dir = output_dir / 'Output_combined'
-        os.makedirs(output_combined_dir, exist_ok=True)
+    output_combined_dir = output_dir / 'Output_combined'
+    os.makedirs(output_combined_dir, exist_ok=True)
 
-        etho_points_3d = load_points_3d_h5(etho_points_3d_path)[0]
-        home_points_3d = load_points_3d_h5(home_points_3d_path)[0]
+    etho_points_3d = load_points_3d_h5(etho_points_3d_path)[0]
+    home_points_3d = load_points_3d_h5(home_points_3d_path)[0]
 
-        duration = np.min((etho_points_3d.shape[0],home_points_3d.shape[0]))
-        etho_points_3d = etho_points_3d[:duration,:,:]
-        home_points_3d = home_points_3d[:duration,:,:]
+    duration = np.min((etho_points_3d.shape[0],home_points_3d.shape[0]))
+    etho_points_3d = etho_points_3d[:duration,:,:]
+    etho_points_3d = remove_absurd_3d_data(etho_points_3d, offset_etho, etho_dimensions)
+    home_points_3d = home_points_3d[:duration,:,:]
+    home_points_3d = remove_absurd_3d_data(home_points_3d, offset_home, home_dimensions)
 
-        idx_head = config_etho.animal['bodyparts'].index('head')
-        idx_leftear = config_etho.animal['bodyparts'].index('leftear')
-        idx_rightear = config_etho.animal['bodyparts'].index('rightear')
+    idx_head = config_etho.animal['bodyparts'].index('head')
+    idx_leftear = config_etho.animal['bodyparts'].index('leftear')
+    idx_rightear = config_etho.animal['bodyparts'].index('rightear')
 
-        idx_neck = config_etho.animal['bodyparts'].index('neck')
-        idx_spinemid = config_etho.animal['bodyparts'].index('spinemid')
-        idx_tailbase = config_etho.animal['bodyparts'].index('tailbase')
+    export_session_data(
+        etho_points_3d, home_points_3d,
+        name_etho, name_home,
+        offset_etho, offset_home,
+        etho_dimensions, home_dimensions,
+        idx_head, idx_leftear, idx_rightear,
+        indices_position = (idx_head, idx_leftear, idx_rightear),
+        session = session,
+        session_output_dir = output_combined_dir,
+        csv_dir = CSV_DIR,
+        skip_visualization = skip_visualization,
+        positions_bin_size = 30,
+    )
 
-        fig, axs = plot_heatmaps(etho_points_3d - offset_etho, etho_dimensions, (idx_head, idx_leftear, idx_rightear))
-        fig.savefig(output_combined_dir / 'HeatmapHeadEtho.png')
-        fig, axs = plot_heatmaps(etho_points_3d - offset_etho, etho_dimensions, (idx_neck, idx_spinemid, idx_tailbase))
-        fig.savefig(output_combined_dir / 'HeatmapBodyEtho.png')
-        fig, axs = plot_heatmaps(home_points_3d - offset_home, home_dimensions, (idx_head, idx_leftear, idx_rightear))
-        fig.savefig(output_combined_dir / 'HeatmapHeadHome.png')
-        fig, axs = plot_heatmaps(home_points_3d - offset_home, home_dimensions, (idx_neck, idx_spinemid, idx_tailbase))
-        fig.savefig(output_combined_dir / 'HeatmapBodyHome.png')
-        fig, axs = plot_distribution_distance(etho_points_3d - offset_etho, home_points_3d - offset_home, (idx_head, idx_leftear, idx_rightear))
-        fig.savefig(output_combined_dir / 'DistributionDistanceHead.png')
-        fig, axs = plot_distribution_distance(etho_points_3d - offset_etho, home_points_3d - offset_home, (idx_neck, idx_spinemid, idx_tailbase))
-        fig.savefig(output_combined_dir / 'DistributionDistanceBody.png')
+    if not skip_visualization:
+        etho_sees_home = np.load(output_combined_dir / f'{name_etho}_sees_{name_home}.npy')
+        home_sees_etho = np.load(output_combined_dir / f'{name_home}_sees_{name_etho}.npy')
+        joint_gaze = np.load(output_combined_dir / 'joint_gaze.npy')
 
-        apex_etho = etho_points_3d[:,idx_head,:]
-        axis_etho = etho_points_3d[:,idx_head,:] - (etho_points_3d[:,idx_rightear,:] + etho_points_3d[:,idx_leftear,:])/2
-        axis_etho = axis_etho/np.linalg.norm(axis_etho, axis = -1)[:,None]
-
-        apex_home= home_points_3d[:,idx_head,:]
-        axis_home = home_points_3d[:,idx_head,:] - (home_points_3d[:,idx_rightear,:] + home_points_3d[:,idx_leftear,:])/2
-        axis_home = axis_home/np.linalg.norm(axis_home, axis = -1)[:,None]
-
-        etho_sees_home = points_in_cone(home_points_3d.transpose((1,0,2)), apex_etho, axis_etho, 5 * np.pi/180, 3000)
-        home_sees_etho = points_in_cone(etho_points_3d.transpose((1,0,2)), apex_home, axis_home, 5 * np.pi/180, 3000)
-
-        # joint_gaze = cones_intersect(apex_home, apex_etho, 3000, 5 * np.pi/180, axis_home, axis_etho, 3000, 5 * np.pi/180, int(3000/10), 32)
-        xs = np.arange(-1500,1501,100)
-        ys = np.arange(-500,1501,100)
-        zs = np.arange(-500,1501,100)
-        x_allpoints, y_allpoints, z_allpoints = np.meshgrid(xs,ys,zs)
-        allpoints = np.concatenate((x_allpoints.flatten()[:,None,None], y_allpoints.flatten()[:,None,None], z_allpoints.flatten()[:,None,None]), axis = -1)
-        home_sees_allpoints = points_in_cone(allpoints, apex_etho, axis_etho, 5 * np.pi/180, 3000)
-        etho_sees_allpoints = points_in_cone(allpoints, apex_home, axis_home, 5 * np.pi/180, 3000)
-        joint_gaze = np.logical_or.reduce(np.logical_and(home_sees_allpoints,etho_sees_allpoints))
-
-        np.save(output_combined_dir / 'home_sees_etho.npy', home_sees_etho)
-        np.save(output_combined_dir / 'etho_sees_home.npy', etho_sees_home)
-        np.save(output_combined_dir / 'joint_gaze.npy', joint_gaze)
         visualizer_3d_combined = Visualizer3DCombined(config_etho, room_dimensions = (etho_dimensions, home_dimensions), offsets = (offset_etho, offset_home), is_seen = (home_sees_etho, etho_sees_home), joint_gaze = joint_gaze, with_gaze=True)
         visualizer_3d_combined.generate_video_3d(source_3d='optimized')
         shutil.copy(Path(config_etho.sub_directory['videos_labeled_3d']) / 'optimized_combined.mp4', output_combined_dir)
 
-
-        try:
-            os.remove(Path(config_etho.sub_directory['points_3d']) / 'optimized_home.h5')
-        except OSError:
-            pass
+    try:
+        os.remove(Path(config_etho.sub_directory['points_3d']) / 'optimized_home.h5')
+    except OSError:
+        pass
 
 
 def get_shift_from_led_dict(led_dict, etho_input_dir, home_input_dir):
@@ -270,6 +246,9 @@ for directory in args.directories:
     directory_path = VIDEO_DIR / directory
     assert os.path.exists(directory_path), f'{directory} not present in {VIDEO_DIR}'
 
+    etho_path = directory_path / 'Etho'
+    home_path = directory_path / 'Home'
+
     path_led_frames = directory_path / 'led_frames.csv'
     if os.path.isfile(path_led_frames):
         led_frames_dict = {}
@@ -282,8 +261,6 @@ for directory in args.directories:
                 keys = first_line
             values = next(led_frames_reader)
 
-        etho_path = directory_path / 'Etho'
-        home_path = directory_path / 'Home'
 
         led_frames_dict['home'] = dict([('output' + key[-1], int(value)) for key, value in zip(keys, values) if key[:-1] == 'home'])
         led_frames_dict['etho'] = dict([('output' + key[-1], int(value)) for key, value in zip(keys, values) if key[:-1] == 'etho'])
@@ -343,7 +320,7 @@ for directory in args.directories:
                 shutil.copytree(output_scratch_home / f'points_3d{suffix}', output_home / 'points_3d', dirs_exist_ok=True)
 
             if combined:
-                run_pipeline_on_dir_combined(etho_path, home_path, SCRATCH_OUTPUT_DIR / directory)
+                run_pipeline_on_dir_combined(etho_path, home_path, SCRATCH_OUTPUT_DIR / directory, directory, read_cage_sessions(directory), skip_visualization=skip_visualization)
                 output_combined = directory_path / 'Output_combined'
                 output_scratch_combined = SCRATCH_OUTPUT_DIR / directory / 'Output_combined'
                 output_combined.mkdir(exist_ok=True)
