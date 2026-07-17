@@ -172,6 +172,7 @@ class Cone:
         self.h = float(height)
         self.d = float(degree)
         self.with_mesh = with_mesh
+        self.hidden = False
         if self.with_mesh:
             self.init_mesh(resolution, color)
             self.color = color
@@ -185,9 +186,20 @@ class Cone:
         self.mesh.translate(self.apex)
 
 
-    def update(self, apex, axis,):
+    def update(self, apex, axis):
+        """
+        Moves the cone to a new apex/axis. Returns False and leaves the cone
+        untouched if apex/axis is invalid (e.g. NaN because the underlying
+        keypoints are missing) - translate/rotate are relative to the mesh's
+        current vertices, so applying a NaN delta would corrupt them
+        permanently, even once valid data returns. Callers should treat a
+        False return as "hide this cone".
+        """
         apex = np.asarray(apex, dtype=float)
         norm_axis = unit(axis)
+        if not (np.all(np.isfinite(apex)) and np.all(np.isfinite(norm_axis))):
+            return False
+
         if self.with_mesh:
             translation = apex - self.apex
             rotation = rotation_matrix_rodrigues(self.u, norm_axis)
@@ -195,6 +207,7 @@ class Cone:
         self.u = norm_axis
         if self.with_mesh:
             self.update_mesh(translation, rotation)
+        return True
 
     def update_color(self, color = (0.8,0.5,0.)):
         if color != self.color:

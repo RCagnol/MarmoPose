@@ -430,16 +430,25 @@ class Visualizer3DCombined:
 
             idx_head = self.config.animal['bodyparts'].index('head')
             head_point = points[idx_head, :]
-            cone.update(head_point, gaze_vector)
-            if joint_gaze:
-                cone.update_color((0,1,0))
-            else:
-                cone.update_color()
-            if np.sum(sees_other) > 0:
-                cone.update_color((0,0,1))
-            else:
-                cone.update_color()
-            self.vis.update_geometry(cone.get_mesh())
+            valid = cone.update(head_point, gaze_vector)
+
+            if valid and cone.hidden:
+                self.vis.add_geometry(cone.get_mesh(), reset_bounding_box=False)
+                cone.hidden = False
+            elif not valid and not cone.hidden:
+                self.vis.remove_geometry(cone.get_mesh(), reset_bounding_box=False)
+                cone.hidden = True
+
+            if valid:
+                if joint_gaze:
+                    cone.update_color((0,1,0))
+                else:
+                    cone.update_color()
+                if np.sum(sees_other) > 0:
+                    cone.update_color((0,0,1))
+                else:
+                    cone.update_color()
+                self.vis.update_geometry(cone.get_mesh())
 
         self.vis.poll_events()
         self.vis.update_renderer()

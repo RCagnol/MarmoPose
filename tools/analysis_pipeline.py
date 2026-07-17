@@ -343,18 +343,37 @@ for directory in args.directories:
             Path(config.sub_directory['calibration']).mkdir(exist_ok=True)
             Path(config.sub_directory['videos_raw']).mkdir(exist_ok=True)
 
-            if 'Input_preprocessed' in os.listdir(directory_path):
-                run_pipeline_on_dir(directory_path, SCRATCH_OUTPUT_DIR / directory, det_model, pose_model, config, shift_frames, skip_2d_if_present = args.skip_2d, skip_visualization = args.skip_visualization)
-                output_srv = directory_path / 'Output'
-                shutil.copytree(SCRATCH_OUTPUT_DIR / directory / 'Output' / 'points_2d', output_srv / 'points_2d', dirs_exist_ok=True)
-                shutil.copytree(SCRATCH_OUTPUT_DIR / directory / 'Output' / 'points_3d', output_srv / 'points_3d', dirs_exist_ok=True)
+            idx_head = config.animal['bodyparts'].index('head')
+            idx_leftear = config.animal['bodyparts'].index('leftear')
+            idx_rightear = config.animal['bodyparts'].index('rightear')
+            name_etho, name_home = read_cage_sessions(directory)
+            name = name_etho if cage1 == 'etho' else name_home
 
-            else:
-                Cage = cage1[0].upper() + cage1[1:]
-                directory_path_cage = directory_path / Cage
-                assert os.path.exists(directory_path_cage), f'{Cage} not present in {directory_path}'
-                scratch_cage = SCRATCH_OUTPUT_DIR / directory / Cage
-                run_pipeline_on_dir(directory_path_cage, scratch_cage, det_model, pose_model, config, shift_frames, skip_2d_if_present = args.skip_2d, skip_visualization = args.skip_visualization)
-                output_cage = directory_path_cage / 'Output'
-                shutil.copytree(scratch_cage / 'Output' / 'points_2d', output_cage / 'points_2d', dirs_exist_ok=True)
-                shutil.copytree(scratch_cage / 'Output' / 'points_3d', output_cage / 'points_3d', dirs_exist_ok=True)
+            Cage = cage1[0].upper() + cage1[1:]
+            directory_path_cage = directory_path / Cage
+            assert os.path.exists(directory_path_cage), f'{Cage} not present in {directory_path}'
+            scratch_cage = SCRATCH_OUTPUT_DIR / directory / Cage
+            run_pipeline_on_dir(directory_path_cage, scratch_cage, det_model, pose_model, config, shift_frames, skip_2d_if_present = args.skip_2d, skip_visualization = args.skip_visualization, suffix_3d = '')
+            output_cage = directory_path_cage / 'Output'
+            shutil.copytree(scratch_cage / 'Output' / 'points_2d', output_cage / 'points_2d', dirs_exist_ok=True)
+            shutil.copytree(scratch_cage / 'Output' / 'points_3d', output_cage / 'points_3d', dirs_exist_ok=True)
+
+            offset = get_offset_from_point(directory_path_cage / 'Calib_preprocessed')
+            points_3d = load_points_3d_h5(output_cage / 'points_3d' / 'optimized.h5')[0]
+            points_3d = remove_absurd_3d_data(points_3d, offset, room_dimensions)
+            session_output_dir = output_cage / 'Output_analysis'
+            os.makedirs(session_output_dir, exist_ok=True)
+
+            export_session_data(
+                points_3d if cage1 == 'etho' else None, points_3d if cage1 == 'home' else None,
+                name if cage1 == 'etho' else None, name if cage1 == 'home' else None,
+                offset if cage1 == 'etho' else None, offset if cage1 == 'home' else None,
+                room_dimensions if cage1 == 'etho' else None, room_dimensions if cage1 == 'home' else None,
+                idx_head, idx_leftear, idx_rightear,
+                indices_position = (idx_head, idx_leftear, idx_rightear),
+                session = directory,
+                session_output_dir = session_output_dir,
+                csv_dir = CSV_DIR,
+                skip_visualization = args.skip_visualization,
+                positions_bin_size = 30,
+            )

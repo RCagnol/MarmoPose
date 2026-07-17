@@ -7,7 +7,7 @@ from scipy.sparse import dok_matrix
 from tqdm import trange
 
 from marmopose.calibration.cameras import CameraGroup
-from marmopose.processing.filter import interpolate_data
+from marmopose.processing.filter import interpolate_data, fill_hold
 
 logger = logging.getLogger(__name__)
 
@@ -38,15 +38,23 @@ def optimize_coordinates(
     scale_smooth = config.optimization['scale_smooth']
     scale_length = config.optimization['scale_length']
     scale_length_weak = config.optimization['scale_length_weak']
+    max_interp_gap = config.optimization['max_interp_gap']
 
     bodypart_dist = parse_constraints(config, 'bodypart_distance')
     bodypart_dist_weak = parse_constraints(config, 'bodypart_distance_weak')
 
     points_3d_prior = points_3d
-    points_3d_interp = np.apply_along_axis(interpolate_data, 0, points_3d_prior)
+    points_3d_interp = np.apply_along_axis(interpolate_data, 0, points_3d_prior, max_gap=max_interp_gap)
 
-    points_3d_original = points_3d_interp[:start_frame]
-    points_3d_unprocessed = points_3d_interp[start_frame:]
+    # Gaps longer than max_interp_gap are left NaN by interpolate_data (the subject was
+    # likely out of frame, not just briefly occluded). The optimizer still needs finite
+    # values to work with, so seed those frames by holding the nearest known position,
+    # then restore the NaNs in the final result so they aren't reported as real data.
+    missing_mask = np.isnan(points_3d_interp)
+    points_3d_seed = np.apply_along_axis(fill_hold, 0, points_3d_interp) if missing_mask.any() else points_3d_interp
+
+    points_3d_original = points_3d_seed[:start_frame]
+    points_3d_unprocessed = points_3d_seed[start_frame:]
     points_with_score_2d_unprocessed = points_with_score_2d[:, start_frame:]
 
     n_frames_unprocessed = points_3d_unprocessed.shape[0]
@@ -103,6 +111,7 @@ def optimize_coordinates(
     points_3d_optimized = np.vstack(optimized_frames_list)
 
     points_3d_result = np.vstack((points_3d_original, points_3d_optimized))
+    points_3d_result[missing_mask] = np.nan
 
     return points_3d_result
     

@@ -181,7 +181,7 @@ def filter_outliers_by_skeleton(data: np.ndarray, threshold: float = 150) -> np.
 
     Args:
         data (np.ndarray): Input array of shape (n_tracks, n_frames, n_bodyparts, 3).
-        max_length (float): The maximum plausible distance between keypoints.
+        threshold (float): The maximum plausible distance between keypoints.
 
     Returns:
         np.ndarray: The filtered 3D coordinates array with outliers set to NaN.

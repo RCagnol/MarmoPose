@@ -37,7 +37,8 @@ class Config:
             'n_deriv_smooth': 1,
             'scale_smooth': 2,
             'scale_length': 2,
-            'scale_length_weak': 1
+            'scale_length_weak': 1,
+            'max_interp_gap': 50
         },
         'sub_directory': {
             'calibration': 'calibration',
