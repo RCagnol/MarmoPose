@@ -107,8 +107,9 @@ def run_pipeline_on_dir(src_dir, dist_dir, det_model, pose_model, config, shift_
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(dist_calib_dir, exist_ok=True)
 
-    calib_camera_params = calib_dir / f'camera_params{suffix_3d}.json'
-    calib_axes = calib_dir / f'axes{suffix_3d}.json'
+    suffix_tag = '' if suffix_3d is None else f'_{suffix_3d}'
+    calib_camera_params = calib_dir / f'camera_params{suffix_tag}.json'
+    calib_axes = calib_dir / f'axes{suffix_tag}.json'
     calib_boards = calib_dir / 'detected_boards.pickle'
     for calib_file in (calib_camera_params, calib_axes, calib_boards):
         assert calib_file.is_file(), f'Missing calibration file: {calib_file}'
@@ -131,7 +132,7 @@ def run_pipeline_on_dir(src_dir, dist_dir, det_model, pose_model, config, shift_
 
     reconstructor_3d = Reconstructor3D(config)
     reconstructor_3d.triangulate(file_names = file_names)
-    shutil.copytree(config.sub_directory['points_3d'], output_dir / f'points_3d{suffix_3d}', dirs_exist_ok=True)
+    shutil.copytree(config.sub_directory['points_3d'], output_dir / f'points_3d{suffix_tag}', dirs_exist_ok=True)
 
     if not skip_visualization:
         if skip_2d:
@@ -143,7 +144,8 @@ def run_pipeline_on_dir(src_dir, dist_dir, det_model, pose_model, config, shift_
 
         visualizer_3d = Visualizer3D(config)
         # visualizer_3d.generate_video_3d(source_3d='optimized', video_type='composite', file_names_2d = [f'output{i}' for i in [1,3]])
-        visualizer_3d.generate_video_3d(source_3d='optimized', video_type='composite', file_names_2d = file_names)
+        offset = get_offset_from_point(calib_dir, suffix_both=suffix_3d)
+        visualizer_3d.generate_video_3d(source_3d='optimized', video_type='composite', file_names_2d = file_names, offset = offset)
         shutil.copytree(config.sub_directory['videos_labeled_3d'], output_dir / 'videos_labeled_3d', dirs_exist_ok=True)
 
     for video in os.listdir(dir_config_videos):
@@ -262,21 +264,38 @@ for directory in args.directories:
             values = next(led_frames_reader)
 
 
-        led_frames_dict['home'] = dict([('output' + key[-1], int(value)) for key, value in zip(keys, values) if key[:-1] == 'home'])
-        led_frames_dict['etho'] = dict([('output' + key[-1], int(value)) for key, value in zip(keys, values) if key[:-1] == 'etho'])
+        led_frames_dict['home'] = dict([('output' + key[-1], value) for key, value in zip(keys, values) if key[:-1] == 'home'])
+        led_frames_dict['etho'] = dict([('output' + key[-1], value) for key, value in zip(keys, values) if key[:-1] == 'etho'])
+
+        etho_input_path = etho_path / 'Input_preprocessed'
+        for k, v in led_frames_dict['etho'].items():
+            if v == 'NaN':
+                etho_input_path = None
+                break
+            else:
+                led_frames_dict['etho'][k] = int(v)
+
+        home_input_path = home_path / 'Input_preprocessed'
+        for k, v in led_frames_dict['home'].items():
+            if v == 'NaN':
+                home_input_path = None
+                break
+            else:
+                led_frames_dict['home'][k] = int(v)
+
         if both or combined:
-            shift_frames_etho, shift_frames_home = get_shift_from_led_dict(led_frames_dict, etho_path / 'Input_preprocessed', home_path / 'Input_preprocessed')
+            shift_frames_etho, shift_frames_home = get_shift_from_led_dict(led_frames_dict, etho_input_path, home_input_path)
         elif cage1 == 'home':
-            _, shift_frames = get_shift_from_led_dict(led_frames_dict, None, home_path / 'Input_preprocessed')
+            _, shift_frames = get_shift_from_led_dict(led_frames_dict, None, home_input_path)
         elif cage1 == 'etho':
-            shift_frames, _ = get_shift_from_led_dict(led_frames_dict, etho_path / 'Input_preprocessed', None)
+            shift_frames, _ = get_shift_from_led_dict(led_frames_dict, etho_input_path, None)
 
     else:
         shift_frames_etho = shift_frames_home = shift_frames = None
 
     if both or combined:
         skip_visualization = args.skip_visualization
-        suffix = '_both' if combined else ''
+        suffix = 'both' if combined else None
 
         with tempfile.TemporaryDirectory(dir=SCRATCH_ROOT) as project_dir_etho, \
              tempfile.TemporaryDirectory(dir=SCRATCH_ROOT) as project_dir_home:
@@ -316,8 +335,9 @@ for directory in args.directories:
                 output_home.mkdir(exist_ok=True)
                 shutil.copytree(output_scratch_etho / 'points_2d', output_etho / 'points_2d', dirs_exist_ok=True)
                 shutil.copytree(output_scratch_home / 'points_2d', output_home / 'points_2d', dirs_exist_ok=True)
-                shutil.copytree(output_scratch_etho / f'points_3d{suffix}', output_etho / 'points_3d', dirs_exist_ok=True)
-                shutil.copytree(output_scratch_home / f'points_3d{suffix}', output_home / 'points_3d', dirs_exist_ok=True)
+                suffix_tag = '' if suffix is None else f'_{suffix}'
+                shutil.copytree(output_scratch_etho / f'points_3d{suffix_tag}', output_etho / 'points_3d', dirs_exist_ok=True)
+                shutil.copytree(output_scratch_home / f'points_3d{suffix_tag}', output_home / 'points_3d', dirs_exist_ok=True)
 
             if combined:
                 run_pipeline_on_dir_combined(etho_path, home_path, SCRATCH_OUTPUT_DIR / directory, directory, read_cage_sessions(directory), skip_visualization=skip_visualization)
@@ -353,7 +373,7 @@ for directory in args.directories:
             directory_path_cage = directory_path / Cage
             assert os.path.exists(directory_path_cage), f'{Cage} not present in {directory_path}'
             scratch_cage = SCRATCH_OUTPUT_DIR / directory / Cage
-            run_pipeline_on_dir(directory_path_cage, scratch_cage, det_model, pose_model, config, shift_frames, skip_2d_if_present = args.skip_2d, skip_visualization = args.skip_visualization, suffix_3d = '')
+            run_pipeline_on_dir(directory_path_cage, scratch_cage, det_model, pose_model, config, shift_frames, skip_2d_if_present = args.skip_2d, skip_visualization = args.skip_visualization, suffix_3d = None)
             output_cage = directory_path_cage / 'Output'
             shutil.copytree(scratch_cage / 'Output' / 'points_2d', output_cage / 'points_2d', dirs_exist_ok=True)
             shutil.copytree(scratch_cage / 'Output' / 'points_3d', output_cage / 'points_3d', dirs_exist_ok=True)
