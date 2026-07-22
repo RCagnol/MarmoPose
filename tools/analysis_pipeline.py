@@ -33,7 +33,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-d", "--directories", nargs="+", required=True, help="Recording directories")
 parser.add_argument("-c", "--cage", choices=["etho", "home", "both", "combined", "full"], required=True, help="Cage, must be etho, home or both")
 parser.add_argument("-m", "--model", choices=["base", "finetune"], required=True, help="Model, must be base or finetune")
-parser.add_argument("-n", "--novideos", action="store_true", help="Disable video creation")
 parser.add_argument("--skip-2d", action="store_true", default=False, help="Skip 2D pose estimation if already present")
 parser.add_argument("--skip-visualization", action="store_true", default=False, help="Skip generation of labeled 2D and 3D videos")
 
@@ -378,7 +377,7 @@ for directory in args.directories:
             shutil.copytree(scratch_cage / 'Output' / 'points_2d', output_cage / 'points_2d', dirs_exist_ok=True)
             shutil.copytree(scratch_cage / 'Output' / 'points_3d', output_cage / 'points_3d', dirs_exist_ok=True)
 
-            offset = get_offset_from_point(directory_path_cage / 'Calib_preprocessed')
+            offset = (0,0,0)
             points_3d = load_points_3d_h5(output_cage / 'points_3d' / 'optimized.h5')[0]
             points_3d = remove_absurd_3d_data(points_3d, offset, room_dimensions)
             session_output_dir = output_cage / 'Output_analysis'

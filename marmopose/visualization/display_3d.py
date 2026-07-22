@@ -47,7 +47,7 @@ class Visualizer3D:
         new_order = [1, 0, 4, 3, 2]
         self.track_color_list = [colors[i] if i < len(new_order) else colors[i] for i in new_order] + colors[len(new_order):]
     
-    def generate_video_3d(self, source_3d: str = 'original', start_frame_idx: int = 0, end_frame_idx: int = None, video_type: str = 'composite', fps: int = 25, file_names_2d: list = None):
+    def generate_video_3d(self, source_3d: str = 'original', start_frame_idx: int = 0, end_frame_idx: int = None, video_type: str = 'composite', fps: int = 25, file_names_2d: list = None, offset: np.ndarray = None):
         assert source_3d in ['original', 'optimized'], f'Invalid data source: {source_3d}'
         assert video_type in ['3d', 'composite'], f'Invalid video type: {video_type}'
         if source_3d == 'optimized':
@@ -58,6 +58,8 @@ class Visualizer3D:
         desc_info = f'Visualizing {video_type}... '
 
         all_points_3d = load_points_3d_h5(self.points_3d_path)
+        if offset is not None:
+            all_points_3d = all_points_3d - offset
         n_tracks, n_frames, n_bodyparts, _ = all_points_3d.shape
         self.initialize_3d(n_tracks, n_bodyparts, room_dimensions=self.room_dimensions)
         if self.with_gaze:
