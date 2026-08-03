@@ -16,9 +16,9 @@ def ping(ip: str) -> bool:
     # Windows ping uses -n for packet count, Linux/macOS use -c
     count_flag = "-n" if is_windows else "-c"
     # Windows -w is a per-packet timeout in ms; Linux -w is a total deadline in seconds
-    timeout = 1000 if is_windows else 5
+    timeout = 1000 if is_windows else 3
     result = subprocess.run(
-        ["ping", count_flag, "5", "-w", str(timeout), ip],
+        ["ping", count_flag, "3", "-w", str(timeout), ip],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -33,6 +33,7 @@ def main():
         ip = f"{args.subnet}.{i}"
         if ping(ip):
             cnt += 1
+            print(f"{ip} connected")
         else:
             print(f"{ip} not connected")
     if cnt == args.end - args.start + 1:
