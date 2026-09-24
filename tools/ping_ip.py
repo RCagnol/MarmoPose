@@ -19,11 +19,11 @@ def ping(ip: str) -> bool:
     timeout = 1000 if is_windows else 3
     result = subprocess.run(
         ["ping", count_flag, "3", "-w", str(timeout), ip],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        capture_output=True,
+        text=True
     )
     # ping exits 0 if at least one of the packets got a reply
-    return result.returncode == 0
+    return 'TTL' in result.stdout
 
 
 def main():
