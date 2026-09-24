@@ -22,8 +22,9 @@ def ping(ip: str) -> bool:
         capture_output=True,
         text=True
     )
-    # ping exits 0 if at least one of the packets got a reply
-    return 'TTL' in result.stdout
+    # Echo replies carry a TTL ("TTL=" on Windows, "ttl=" on Linux/macOS). The exit code isn't used because
+    # Windows ping exits 0 even for "Destination host unreachable".
+    return 'ttl=' in result.stdout.lower()
 
 
 def main():
