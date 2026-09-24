@@ -26,6 +26,12 @@ def load_axes(file_path: str) -> Dict:
     return data_dict
 
 def get_offset_from_point(calibPath, suffix_single = None, suffix_both = 'both'):
+    """
+    Get 3D offset from 4th point annotated in calibPath/axes_{suffix_single}, using
+    the camera parameters at calibPath/axes_{suffix_both}.
+    The offset can then be used to switch from common cages referential to single cage referential.
+    """
+    calibPath = Path(calibPath)
     suffix_single = '' if suffix_single is None else f'_{suffix_single}'
     suffix_both = '' if suffix_both is None else f'_{suffix_both}'
     axes = load_axes(calibPath / f"axes{suffix_single}.json")

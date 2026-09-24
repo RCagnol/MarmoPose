@@ -35,7 +35,6 @@ class Calibrator:
     def calibrate(self):
         cam_names, video_list = self.get_video_list(self.calib_video_paths)
         board = self.get_calibration_board(self.config)
-        print(board)
 
         if not self.output_path.exists():
             detected_file = self.calibration_path / 'detected_boards.pickle'
@@ -52,8 +51,16 @@ class Calibrator:
             cgroup = CameraGroup.from_names(cam_names, self.config.calibration['fisheye'])
             cgroup.set_camera_sizes_videos(video_list)
 
+            intrinsics_from = self.config.calibration.get('intrinsics_from')
+            init_intrinsics = True
+            if intrinsics_from:
+                logger.info(f'Reusing intrinsics from: {intrinsics_from}')
+                source_cgroup = CameraGroup.load_from_json(str(intrinsics_from))
+                cgroup.set_intrinsics_from(source_cgroup)
+                init_intrinsics = False
+
             cgroup.calibrate_rows(all_rows, board,
-                                 init_intrinsics=True, init_extrinsics=True,
+                                 init_intrinsics=init_intrinsics, init_extrinsics=True,
                                  initial_focal_length=self.config.calibration['initial_focal_length'],
                                  n_iters=10, start_mu=15, end_mu=1,
                                  max_nfev=200, ftol=1e-5,
@@ -113,7 +120,6 @@ class Calibrator:
     
     @staticmethod
     def get_calibration_board(config: Config) -> Checkerboard:
-        print(config.calibration)
         board_type = config.calibration['board_type']
         board_size = config.calibration['board_size']
         square_length = config.calibration['board_square_side_length']
