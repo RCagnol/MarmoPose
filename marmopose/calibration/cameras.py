@@ -273,26 +273,36 @@ class FisheyeCamera(Camera):
         d['fisheye'] = True
         return d
     
-    def set_params(self, params):
+    def set_params(self, params, with_focal_length = True):
         self.set_rotation(params[0:3])
         self.set_translation(params[3:6])
-        self.set_focal_length(params[6])
+        if with_focal_length:
+            self.set_focal_length(params[6])
+            d = 0
+        else:
+            d = 1
 
         distortion = np.zeros(4)
-        distortion[0] = params[7]
+        distortion[0] = params[7 - d]
         if self.extra_distortion:
-            distortion[1] = params[8]
+            distortion[1] = params[8 - d]
         self.set_distortion(distortion)
 
-    def get_params(self):
-        params = np.zeros(8+self.extra_distortion)
+    def get_params(self, with_focal_length = True):
+        if with_focal_length:
+            d = 0
+        else:
+            d = 1
+    
+        params = np.zeros(8 - d + self.extra_distortion)
         params[0:3] = self.get_rotation()
         params[3:6] = self.get_translation()
-        params[6] = self.get_focal_length()
-        dist = self.get_distortion()
-        params[7] = dist[0]
+        if with_focal_length:
+            params[6] = self.get_focal_length()
+        distortion = self.get_distortion()
+        params[7 - d] = distortion[0]
         if self.extra_distortion:
-            params[8] = dist[1]
+            params[8 - d] = distortion[1]
         return params
     
     def distort_points(self, points_2d: np.ndarray) -> np.ndarray:
@@ -422,7 +432,42 @@ class CameraGroup:
                 params = get_video_params(vidname)
                 size = (params['width'], params['height'])
                 cam.set_size(size)
-        
+
+    def set_intrinsics_from(self, other: 'CameraGroup') -> None:
+        """Copy camera matrix and distortion coefficients from a previously calibrated
+        CameraGroup, matched by camera name. Used to reuse intrinsics from another
+        calibration instead of re-estimating them from board detections. Extrinsics
+        (rotation/translation) are left untouched, since those are what change between
+        calibrations that share the same cameras/lenses.
+
+        Args:
+            other: CameraGroup holding the source intrinsics (e.g. loaded via `load_from_json`).
+        """
+        other_by_name = {cam.get_name(): cam for cam in other.cameras}
+        missing = [cam.get_name() for cam in self.cameras if cam.get_name() not in other_by_name]
+        if missing:
+            raise ValueError(f"No intrinsics found for camera(s) {missing} in source calibration; "
+                              f"available names: {list(other_by_name.keys())}")
+
+        for cam in self.cameras:
+            src = other_by_name[cam.get_name()]
+            if isinstance(cam, FisheyeCamera) != isinstance(src, FisheyeCamera):
+                raise ValueError(f"Camera model mismatch for '{cam.get_name()}': fisheye setting "
+                                  f"differs between source and target calibration")
+
+            matrix = src.get_camera_matrix().copy()
+            src_size, dst_size = src.get_size(), cam.get_size()
+            if src_size is not None and dst_size is not None and tuple(src_size) != tuple(dst_size):
+                sx, sy = dst_size[0] / src_size[0], dst_size[1] / src_size[1]
+                logger.info(f"Scaling intrinsics for '{cam.get_name()}' from size {src_size} to {dst_size}")
+                matrix[0, 0] *= sx
+                matrix[0, 2] *= sx
+                matrix[1, 1] *= sy
+                matrix[1, 2] *= sy
+
+            cam.set_camera_matrix(matrix)
+            cam.set_distortion(src.get_distortion().copy())
+
     def triangulate(self, points_with_score_2d_flat: np.ndarray, undistort: bool = True) -> np.ndarray:
         """Triangulate 3D points from 2D points using camera extrinsic matrices.
 
@@ -454,15 +499,30 @@ class CameraGroup:
 
         return points_3d_flat
 
-    def triangulate_ransac(self, points_with_score_2d_flat: np.ndarray, undistort: bool = True) -> np.ndarray:
-        """Triangulate 3D points from 2D points using exhaustive search over camera combinations.
+    def triangulate_ransac(self, points_with_score_2d_flat: np.ndarray, undistort: bool = True, error_threshold: float = 10.0,
+                           return_rejected: bool = False):
+        """Triangulate 3D points from 2D points, excluding a camera view only when it is a clear outlier.
+
+        Starts from the triangulation using all valid camera views. Only if that solution has a
+        camera whose reprojection error exceeds `error_threshold` does it search leave-one-out
+        combinations, and only adopts one if it actually reduces the worst-camera error. This avoids
+        discarding views when detections are just ordinary noise (no real outlier), which would
+        otherwise throw away the redundancy that makes triangulation robust to noise in the first place.
+
+        Each leave-one-out candidate is judged only on the views it was triangulated from. Including
+        the excluded view would count the outlier's own (large) error against every candidate that
+        drops it, so the outlier could never be rejected.
 
         Args:
             points_with_score_2d_flat: 2D points of shape (n_cameras, n_points, 3).
             undistort (optional): Whether to undistort the 2D points using camera intrinsic matrices. Defaults to True.
+            error_threshold (optional): Reprojection error (pixels) above which a camera view is treated
+                as a potential outlier worth excluding. Defaults to 10.0.
+            return_rejected (optional): Also return which views were excluded. Defaults to False.
 
         Returns:
-            3D points of shape (n_points, 3).
+            3D points of shape (n_points, 3). If `return_rejected`, also a boolean mask of shape
+            (n_cameras, n_points), True where a valid view was excluded from the triangulation.
         """
         if points_with_score_2d_flat.shape[-1] == 3:
             points_2d_flat, scores_2d = points_with_score_2d_flat[..., :2], points_with_score_2d_flat[..., 2]
@@ -477,6 +537,7 @@ class CameraGroup:
         cam_mats = np.array([cam.get_extrinsic_matrix() for cam in self.cameras])
         n_points = points_2d_flat_undistorted.shape[1]
         points_3d_flat = np.full((n_points, 3), np.nan)
+        rejected = np.zeros((len(self.cameras), n_points), dtype=bool)
 
         for pt_idx in range(n_points):
             sub_points_distorted = points_2d_flat[:, pt_idx, :]
@@ -486,26 +547,33 @@ class CameraGroup:
             valid_indices = np.where(valid_points)[0]
 
             if len(valid_indices) >= 2:
-                best_mean_error = np.inf
-                best_point_3d = None
-
-                for r in range(len(valid_indices)-1, len(valid_indices) + 1):
-                    for indices in combinations(valid_indices, r):
-                        selected_points = sub_points[list(indices), :]
-                        selected_cam_mats = cam_mats[list(indices), :, :]
+                best_point_3d = triangulate_SVD(sub_points[valid_indices], cam_mats[valid_indices])
+                best_indices = valid_indices
+                points_2d_reprojected = self.reproject(best_point_3d[np.newaxis, :])
+                reproj_errors = np.linalg.norm(points_2d_reprojected[valid_indices, 0, :] - sub_points_distorted[valid_indices, :], axis=1)
+                best_max_error = np.max(reproj_errors)
+                if len(valid_indices) > 2 and best_max_error > error_threshold:
+                    for indices in combinations(valid_indices, len(valid_indices) - 1):
+                        indices = list(indices)
+                        selected_points = sub_points[indices, :]
+                        selected_cam_mats = cam_mats[indices, :, :]
 
                         points_3d = triangulate_SVD(selected_points, selected_cam_mats)
 
                         points_2d_reprojected = self.reproject(points_3d[np.newaxis, :])
-                        reproj_errors = np.linalg.norm(points_2d_reprojected[valid_indices, 0, :] - sub_points_distorted[valid_indices, :], axis=1)
+                        reproj_errors = np.linalg.norm(points_2d_reprojected[indices, 0, :] - sub_points_distorted[indices, :], axis=1)
 
-                        mean_error = np.median(reproj_errors)
-                        if mean_error < best_mean_error:
-                            best_mean_error = mean_error
+                        max_error = np.max(reproj_errors)
+                        if max_error < best_max_error:
+                            best_max_error = max_error
                             best_point_3d = points_3d
+                            best_indices = indices
 
                 points_3d_flat[pt_idx] = best_point_3d
+                rejected[np.setdiff1d(valid_indices, best_indices), pt_idx] = True
 
+        if return_rejected:
+            return points_3d_flat, rejected
         return points_3d_flat
 
     def reproject(self, points_3d):
@@ -1166,6 +1234,11 @@ def mean_transform_robust(M_list, approx=None, error=0.3):
             m = np.max(np.abs(rot_error))
             if m < error:
                 M_list_robust.append(M)
+        if not M_list_robust:
+            logger.warning(f'mean_transform_robust: no transforms within error={error} of the initial '
+                            f'estimate out of {len(M_list)} candidates; falling back to the initial estimate. '
+                            f'This usually means two cameras have very few/inconsistent shared board detections.')
+            return approx
     return mean_transform(M_list_robust)
 
 

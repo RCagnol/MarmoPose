@@ -18,10 +18,11 @@ calibration:
   n_cameras: 4
   board_type: 'checkerboard' # checkerboard or charuco
   board_size: [11, 8]
-  board_square_side_length: 20 # mm
-  marker_length: 12 # mm
-  fisheye: false
+  board_square_side_length: 19 # mm
+  marker_length: 24 # mm
+  fisheye: False
   initial_focal_length: 1120 # pixels, initial guess for intrinsic calibration
+  intrinsics_from: null # path to another calibration's camera_params.json to reuse its intrinsics instead of re-estimating them
 
 
 visualization:
@@ -53,23 +54,34 @@ optimization:
   scale_smooth: 2
   scale_length: 2
   scale_length_weak: 1
+  max_nfev: 100 # solver evaluations per batch; 10 often returned the input unchanged
+  ftol: 1.0e-4
+  reproj_saturation_px: 30 # Cauchy scale for reprojection residuals (px); 10 let bone constraints override good detections
 
+  # [length, tolerance] in mm: lengths within length ± tolerance are unpenalized. Estimated for our animals
+  # with tools/estimate_bone_lengths.py over sessions 260720-260820, both cages pooled; the band covers every
+  # session's median, i.e. animal size plus keypoint-placement differences between pose models.
+  # Upstream's exact values (their animals/labels) were: head-ear 21, ear-neck 52, neck-spinemid 58,
+  # spinemid-tailbase 73, neck-elbow 73, elbow-hand 54, tailbase-knee 90, tail segments 103, knee-foot 42.
   bodypart_distance:
-    'head - rightear': 21.0 # mm
-    'head - leftear': 21.0
-    'rightear - neck': 52.0
-    'leftear - neck': 52.0
-    'neck - spinemid': 58.0
-    'spinemid - tailbase': 73.0
-    'neck - rightelbow': 73.0
-    'rightelbow - righthand': 54.0
-    'neck - leftelbow': 73.0
-    'leftelbow - lefthand': 54.0
-    'tailbase - rightknee': 90.0
-    'tailbase - leftknee': 90.0
+    'head - rightear': [23, 2] # session medians 22-24
+    'head - leftear': [23, 3] # session medians 21-25
+    'leftear - rightear': [25, 7] # session medians 19-30
+    'head - neck': [59, 13] # session medians 49-70
+    'rightear - neck': [44, 15] # session medians 32-57
+    'leftear - neck': [47, 13] # session medians 37-58
+    'neck - spinemid': [66, 11] # session medians 58-74
+    'spinemid - tailbase': [89, 15] # session medians 79-100
+    'neck - tailbase': [145, 15] # session medians 137-152; trunk length regardless of where spinemid lands
+    'neck - rightelbow': [73, 8] # session medians 68-77
+    'neck - leftelbow': [74, 14] # session medians 64-84
+    'tailbase - rightknee': [87, 9] # session medians 82-91
+    'tailbase - leftknee': [88, 10] # session medians 83-93
 
-  bodypart_distance_weak:
-    'tailbase - tailmid': 103.0
-    'tailmid - tailend': 103.0
-    'rightknee - rightfoot': 42.0
-    'leftknee - leftfoot': 42.0
+  bodypart_distance_weak: # non-rigid pairs or loosely defined keypoints
+    'rightelbow - righthand': [63, 10] # session medians 56-70
+    'leftelbow - lefthand': [63, 14] # session medians 52-74
+    'tailbase - tailmid': [132, 30] # session medians 109-155
+    'tailmid - tailend': [132, 27] # session medians 111-153
+    'rightknee - rightfoot': [49, 26] # session medians 25-72
+    'leftknee - leftfoot': [57, 31] # session medians 29-85

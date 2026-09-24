@@ -11,6 +11,10 @@ from marmopose.processing.filter import interpolate_data, fill_hold
 
 logger = logging.getLogger(__name__)
 
+# Points closer to (or behind) a camera's image plane than this (mm) get a constant reprojection
+# residual for that camera, instead of a projection that divides by ~0 or mirrors through the lens.
+MIN_DEPTH = 10.0
+
 
 def optimize_coordinates(
     config,
@@ -39,6 +43,9 @@ def optimize_coordinates(
     scale_length = config.optimization['scale_length']
     scale_length_weak = config.optimization['scale_length_weak']
     max_interp_gap = config.optimization['max_interp_gap']
+    max_nfev = config.optimization['max_nfev']
+    ftol = config.optimization['ftol']
+    saturation_px = config.optimization['reproj_saturation_px']
 
     bodypart_dist = parse_constraints(config, 'bodypart_distance')
     bodypart_dist_weak = parse_constraints(config, 'bodypart_distance_weak')
@@ -53,9 +60,20 @@ def optimize_coordinates(
     missing_mask = np.isnan(points_3d_interp)
     points_3d_seed = np.apply_along_axis(fill_hold, 0, points_3d_interp) if missing_mask.any() else points_3d_interp
 
+    # Reprojection is computed against undistorted (normalized) observations with a pinhole model.
+    # Projecting through the lens distortion instead makes points far outside a camera's view
+    # (e.g. a filled-in point seeded badly) produce residuals up to ~1e15 px, which stall the solver.
+    n_cams = points_with_score_2d.shape[0]
+    points_2d_norm = np.array([cam.undistort_points(np.copy(pts).reshape(-1, 2)).reshape(pts.shape)
+                               for pts, cam in zip(points_with_score_2d[..., :2], camera_group.cameras)])
+    scores_2d = np.nan_to_num(points_with_score_2d[..., 2], nan=0.0)
+    cam_mats = np.array([cam.get_extrinsic_matrix()[:3] for cam in camera_group.cameras])  # (n_cams, 3, 4)
+    focal_lengths = np.array([[cam.matrix[0, 0], cam.matrix[1, 1]] for cam in camera_group.cameras])  # (n_cams, 2)
+
     points_3d_original = points_3d_seed[:start_frame]
     points_3d_unprocessed = points_3d_seed[start_frame:]
-    points_with_score_2d_unprocessed = points_with_score_2d[:, start_frame:]
+    points_2d_norm_unprocessed = points_2d_norm[:, start_frame:]
+    scores_2d_unprocessed = scores_2d[:, start_frame:]
 
     n_frames_unprocessed = points_3d_unprocessed.shape[0]
 
@@ -69,12 +87,13 @@ def optimize_coordinates(
             batch_end = min((batch_idx + 1) * batch_size, n_frames_unprocessed)
 
             points_3d_batch = points_3d_unprocessed[batch_start:batch_end]
-            points_with_score_2d_batch = points_with_score_2d_unprocessed[:, batch_start:batch_end]
+            points_2d_norm_batch = points_2d_norm_unprocessed[:, batch_start:batch_end]
+            scores_2d_batch = scores_2d_unprocessed[:, batch_start:batch_end]
 
             initial_params_batch = points_3d_batch.ravel()
 
             jac_sparsity_batch = get_jac_sparsity(
-                points_with_score_2d_batch[..., :2],
+                points_2d_norm_batch,
                 n_deriv_smooth,
                 bodypart_dist,
                 bodypart_dist_weak,
@@ -84,14 +103,17 @@ def optimize_coordinates(
                 fun=compute_residuals,
                 x0=initial_params_batch,
                 method='trf',
-                loss='linear',
-                ftol=1e-2,
-                max_nfev=10,
+                loss='linear',  # Robustness is applied to the reprojection term only, see reprojection_residual
+                ftol=ftol,
+                max_nfev=max_nfev,
                 jac_sparsity=jac_sparsity_batch,
                 verbose=0,
                 args=(
-                    camera_group,
-                    points_with_score_2d_batch,
+                    cam_mats,
+                    focal_lengths,
+                    saturation_px,
+                    points_2d_norm_batch,
+                    scores_2d_batch,
                     n_deriv_smooth,
                     scale_smooth,
                     scale_length,
@@ -187,12 +209,12 @@ def compute_residuals(points_3d_flat: np.ndarray, *args: Tuple) -> np.ndarray:
     Returns:
         Residuals.
     """
-    camera_group, points_with_score_2d, n_deriv_smooth, scale_smooth, \
+    cam_mats, focal_lengths, saturation_px, points_2d_norm, scores_2d, n_deriv_smooth, scale_smooth, \
         scale_length, scale_length_weak, bodypart_dist, bodypart_dist_weak = args
-    
-    n_cams, n_frames, n_joints, _ = points_with_score_2d.shape
+
+    n_cams, n_frames, n_joints, _ = points_2d_norm.shape
     points_3d = points_3d_flat.reshape((n_frames, n_joints, 3))
-    errors_reproj = reprojection_residual(camera_group, points_3d, points_with_score_2d)
+    errors_reproj = reprojection_residual(points_3d, points_2d_norm, scores_2d, cam_mats, focal_lengths, saturation_px)
     errors_smooth = smoothness_residual(points_3d, n_deriv_smooth, scale_smooth)
     errors_lengths = bodypart_length_residual(points_3d, bodypart_dist, bodypart_dist_weak, scale_length, scale_length_weak)
     
@@ -200,32 +222,43 @@ def compute_residuals(points_3d_flat: np.ndarray, *args: Tuple) -> np.ndarray:
     return residuals
 
 
-def reprojection_residual(camera_group: CameraGroup, points_3d: np.ndarray, points_with_score_2d: np.ndarray) -> np.ndarray:
+def reprojection_residual(points_3d: np.ndarray, points_2d_norm: np.ndarray, scores_2d: np.ndarray,
+                          cam_mats: np.ndarray, focal_lengths: np.ndarray, saturation_px: float) -> np.ndarray:
     """
-    Calculate Reprojection Residuals.
+    Calculate Reprojection Residuals, Cauchy-saturated so outliers cannot dominate the cost.
+
+    Each residual r (pixels) becomes delta * sqrt(log(1 + (r/delta)^2)) with delta = saturation_px:
+    unchanged for r << delta, growing only logarithmically beyond. This robustifies the reprojection
+    term alone; scipy's `loss=` would also weaken the bone-length and smoothness terms.
 
     Args:
-        camera_group: Group of cameras for reprojection.
-        points_3d: 3D coordinates of points.
-        points_with_score_2d: 2D coordinates of points with scores.
+        points_3d: 3D coordinates of points, shape (n_frames, n_bodyparts, 3).
+        points_2d_norm: Undistorted normalized 2D observations, shape (n_cams, n_frames, n_bodyparts, 2).
+        scores_2d: Detection scores, NaN replaced by 0, shape (n_cams, n_frames, n_bodyparts).
+        cam_mats: Extrinsic matrices, shape (n_cams, 3, 4).
+        focal_lengths: (fx, fy) per camera, shape (n_cams, 2), to express errors in pixels.
+        saturation_px: Cauchy scale delta, in pixels.
 
     Returns:
-        Reprojection residuals.
+        Reprojection residuals for valid observations, shape (n_valid,).
     """
-    points_2d, scores_2d = points_with_score_2d[..., :2], points_with_score_2d[..., 2]
-    n_cams = points_2d.shape[0]
+    n_cams = points_2d_norm.shape[0]
     points_3d_flat = points_3d.reshape(-1, 3)
-    points_2d_flat = points_2d.reshape((n_cams, -1, 2))
-    errors = camera_group.reprojection_error(points_3d_flat, points_2d_flat)
-    # TODO: Maybe not L2 norm, squared L2 norm?
-    errors = np.linalg.norm(errors, axis=2) # (n_cams, n_frames*n_bodyparts)
+    points_2d_flat = points_2d_norm.reshape((n_cams, -1, 2))
 
-    # TODO: Set proper scores for nan values
-    scores_2d[np.isnan(scores_2d)] = 0
-    scores_flat = scores_2d.reshape((n_cams, -1))
-    errors = errors * scores_flat
-    
-    # TODO: If the 2D points was interploated, should they be ignored?
+    points_cam = np.einsum('cij,nj->cni', cam_mats[:, :, :3], points_3d_flat) + cam_mats[:, np.newaxis, :, 3]  # (n_cams, N, 3)
+    depth = points_cam[..., 2]
+    in_front = depth > MIN_DEPTH
+    projected = points_cam[..., :2] / np.where(in_front, depth, 1.0)[..., np.newaxis]
+
+    errors = np.linalg.norm((projected - points_2d_flat) * focal_lengths[:, np.newaxis, :], axis=2)  # (n_cams, N), NaN where unobserved
+    errors = saturation_px * np.sqrt(np.log1p((errors / saturation_px) ** 2))
+
+    # Constant (zero-gradient) cost for observed points behind the camera: the pinhole projection is meaningless there
+    errors[~in_front & ~np.isnan(errors)] = saturation_px * np.sqrt(np.log1p(1e8))
+
+    errors = errors * scores_2d.reshape((n_cams, -1))
+
     errors_valid = errors[~np.isnan(errors)] # (n_cams * valid n_frames*n_bodyparts,)
     return errors_valid
 
@@ -268,41 +301,46 @@ def bodypart_length_residual(points_3d: np.ndarray,
     """
     n_frames = points_3d.shape[0]
 
+    # Lengths within `tolerance` of the expected length cost nothing; beyond it the penalty grows linearly
     errors = np.empty((len(bodypart_dist), n_frames), dtype='float64')
-    for cix, ((bp1, bp2), expected_length) in enumerate(bodypart_dist):
+    for cix, ((bp1, bp2), (expected_length, tolerance)) in enumerate(bodypart_dist):
         actual_lengths = np.linalg.norm(points_3d[:, bp1] - points_3d[:, bp2], axis=1)
         # TODO: Maybe not L2 norm, squared L2 norm?
-        errors[cix] = np.abs(actual_lengths - expected_length)
+        errors[cix] = np.maximum(np.abs(actual_lengths - expected_length) - tolerance, 0)
     errors = errors.ravel() * scale_length # (n_constraints * n_frames,)
 
     errors_weak = np.empty((len(bodypart_dist_weak), n_frames), dtype='float64')
-    for cix, ((bp1, bp2), expected_length) in enumerate(bodypart_dist_weak):
+    for cix, ((bp1, bp2), (expected_length, tolerance)) in enumerate(bodypart_dist_weak):
         actual_lengths = np.linalg.norm(points_3d[:, bp1] - points_3d[:, bp2], axis=1)
-        errors_weak[cix] = np.abs(actual_lengths - expected_length)
+        errors_weak[cix] = np.maximum(np.abs(actual_lengths - expected_length) - tolerance, 0)
     errors_weak = errors_weak.ravel() * scale_length_weak
 
     errors = np.hstack((errors, errors_weak))
     return errors
 
 
-def parse_constraints(config: Dict[str, Any], key: str) -> List[Tuple[Tuple[int, int], float]]:
+def parse_constraints(config: Dict[str, Any], key: str) -> List[Tuple[Tuple[int, int], Tuple[float, float]]]:
     """
     Parse Body Part Constraints from Configuration.
+
+    Each entry is either `'a - b': length` (exact target) or `'a - b': [length, tolerance]`
+    (any length within length ± tolerance is unpenalized).
 
     Args:
         config: Configuration dictionary.
         key: The key to look for in the dictionary.
 
     Returns:
-        Parsed constraints.
+        Parsed constraints as ((bp1, bp2), (length, tolerance)).
     """
     bodyparts = config.animal['bodyparts']
     bodypart_indices = {bp_name: idx for idx, bp_name in enumerate(bodyparts)}
-    
+
     constraint_dict = config.optimization[key]
     constraint_list = []
     for key, value in constraint_dict.items():
         bp = tuple([bodypart_indices[bp.strip()] for bp in key.split('-')])
-        constraint_list.append((bp, value))
-    
+        length, tolerance = (value, 0.0) if np.isscalar(value) else value
+        constraint_list.append((bp, (float(length), float(tolerance))))
+
     return constraint_list

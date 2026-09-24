@@ -61,9 +61,15 @@ class Reconstructor3D:
 
         if reassign_id:
             logger.info("ID reassignment enabled")
-            all_points_3d, all_points_with_score_2d = self._triangulate_with_reassignment(all_points_with_score_2d) # TODO: Store reassigned all_points_with_score_2d and all_bboxes
+            all_points_3d, all_points_with_score_2d, all_rejected = self._triangulate_with_reassignment(all_points_with_score_2d) # TODO: Store reassigned all_points_with_score_2d and all_bboxes
         else:
-            all_points_3d = self._triangulate_without_reassignment(all_points_with_score_2d)
+            all_points_3d, all_rejected = self._triangulate_without_reassignment(all_points_with_score_2d)
+
+        # Views RANSAC excluded must not pull the point back during optimization
+        n_observations = np.sum(~np.isnan(all_points_with_score_2d[..., 0]))
+        all_points_with_score_2d = all_points_with_score_2d.copy()
+        all_points_with_score_2d[all_rejected] = np.nan
+        logger.info(f'RANSAC rejected {all_rejected.sum()} of {n_observations} 2D observations')
 
         all_points_3d = filter_outliers_by_skeleton(all_points_3d, 150) # filter out outliers
 
@@ -86,19 +92,22 @@ class Reconstructor3D:
         n_cams, n_tracks, n_frames, n_bodyparts, n_dim = all_points_with_score_2d.shape
 
         all_points_3d = np.full((n_tracks, n_frames, n_bodyparts, 3), np.nan)
+        all_rejected = np.zeros((n_cams, n_tracks, n_frames, n_bodyparts), dtype=bool)
 
         for frame_idx in trange(n_frames, ncols=100, desc='Triangulating... ', unit='frames'):
             all_points_with_score_2d_frame = all_points_with_score_2d[:, :, frame_idx]  # (n_cams, n_tracks, n_bodyparts, 3)
-            points_3d = self.triangulate_frame(all_points_with_score_2d_frame, ransac=True)  # (n_tracks, n_bodyparts, 3)
+            points_3d, rejected = self.triangulate_frame(all_points_with_score_2d_frame, ransac=True, return_rejected=True)  # (n_tracks, n_bodyparts, 3)
             all_points_3d[:, frame_idx] = points_3d
-        
-        return all_points_3d
+            all_rejected[:, :, frame_idx] = rejected
+
+        return all_points_3d, all_rejected
 
     def _triangulate_with_reassignment(self, all_points_with_score_2d):
         n_cams, n_tracks, n_frames, n_bodyparts, n_dim = all_points_with_score_2d.shape
 
         all_points_3d_reassigned = np.full((n_tracks, n_frames, n_bodyparts, 3), np.nan)
         all_points_with_score_2d_reassigned = all_points_with_score_2d.copy()
+        all_rejected = np.zeros((n_cams, n_tracks, n_frames, n_bodyparts), dtype=bool)
 
         for frame_idx in trange(n_frames, ncols=100, desc='Triangulating... ', unit='frames'):
             all_points_with_score_2d_frame = all_points_with_score_2d[:, :, frame_idx]  # (n_cams, n_tracks, n_bodyparts, 3)
@@ -114,32 +123,38 @@ class Reconstructor3D:
                 distorted = cam.distort_points(undistorted).reshape(n_tracks, n_bodyparts, 2)
                 points_with_score_2d_distorted[i, :, :, :2] = distorted
             
-            points_3d = self.triangulate_frame(points_with_score_2d_distorted, ransac=True)  # (n_tracks, n_bodyparts, 3)
+            points_3d, rejected = self.triangulate_frame(points_with_score_2d_distorted, ransac=True, return_rejected=True)  # (n_tracks, n_bodyparts, 3)
 
             all_points_3d_reassigned[:, frame_idx] = points_3d
             all_points_with_score_2d_reassigned[:, :, frame_idx] = points_with_score_2d_distorted
-        
-        return all_points_3d_reassigned, all_points_with_score_2d_reassigned
+            all_rejected[:, :, frame_idx] = rejected
 
-    def triangulate_frame(self, points_with_score_2d: np.ndarray, ransac=True):
+        return all_points_3d_reassigned, all_points_with_score_2d_reassigned, all_rejected
+
+    def triangulate_frame(self, points_with_score_2d: np.ndarray, ransac=True, return_rejected=False):
         """
         Args:
             points_with_score_2d: (n_cams, n_tracks, n_bodyparts, (x, y, score))
-        
+            return_rejected: Also return which views RANSAC excluded.
+
         Returns:
             points_3d: (n_tracks, n_bodyparts, (x, y, z))
+            rejected (if return_rejected): (n_cams, n_tracks, n_bodyparts), True where a view was excluded
         """
         n_cams, n_tracks, n_bodyparts, n_dim = points_with_score_2d.shape
 
         points_with_score_2d_flat = points_with_score_2d.reshape(n_cams, n_tracks*n_bodyparts, n_dim)
 
         if ransac:
-            points_3d_flat = self.camera_group.triangulate_ransac(points_with_score_2d_flat, undistort=True)
+            points_3d_flat, rejected_flat = self.camera_group.triangulate_ransac(points_with_score_2d_flat, undistort=True, return_rejected=True)
         else:
             points_3d_flat = self.camera_group.triangulate(points_with_score_2d_flat, undistort=True)
-            
+            rejected_flat = np.zeros((n_cams, n_tracks*n_bodyparts), dtype=bool)
+
         points_3d = points_3d_flat.reshape((n_tracks, n_bodyparts, 3)) # (n_tracks, n_bodyparts, (x, y, z))
 
+        if return_rejected:
+            return points_3d, rejected_flat.reshape((n_cams, n_tracks, n_bodyparts))
         return points_3d
 
     def fill_with_dae(self, points_3d: np.ndarray, batch_size: int = 7500) -> np.ndarray:

@@ -14,7 +14,8 @@ class Config:
             'board_type': 'checkerboard',
             'board_square_side_length': 45,
             'fisheye': True,
-            'initial_focal_length': None
+            'initial_focal_length': None,
+            'intrinsics_from': None
         },
         'animal': {
             'label_mapping': None
@@ -38,7 +39,10 @@ class Config:
             'scale_smooth': 2,
             'scale_length': 2,
             'scale_length_weak': 1,
-            'max_interp_gap': 50
+            'max_interp_gap': 50,
+            'max_nfev': 100,
+            'ftol': 1e-4,
+            'reproj_saturation_px': 30
         },
         'sub_directory': {
             'calibration': 'calibration',
